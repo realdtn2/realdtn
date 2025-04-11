@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Show OLM Answers
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  Show answers that the website leaks
 // @author       realdtn
 // @match        *://*.olm.vn/*
