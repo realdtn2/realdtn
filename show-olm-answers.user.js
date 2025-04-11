@@ -18,7 +18,7 @@
 
     window.addEventListener('load', () => {
         const logStorage = [];
-        const filterPrefix = '{"bttl":false,';
+        const filterKeyword = '"bttl"';
 
         const methods = ['log', 'info', 'warn', 'error', 'debug'];
         methods.forEach(method => {
@@ -33,7 +33,7 @@
                     }
                 }).join(' ');
 
-                if (combinedText.startsWith(filterPrefix)) {
+                if (combinedText.includes(filterKeyword)) {
                     logStorage.push(`[${timestamp}] ${combinedText}`);
                 }
 
@@ -42,17 +42,21 @@
         });
 
         function extractCorrectAnswers() {
-            const correctAnswerPattern = /<li\s+class\s*=\s*['"]correctAnswer['"][^>]*>.*?<\/li>/gi;
-            const dapAnPattern = /Đáp án:\s*([\s\S]*?)(<[^>]+>|\\n|\\r|$)/gi;
-
             const matches = [];
 
             logStorage.forEach(entry => {
-                const correctMatches = entry.match(correctAnswerPattern);
-                if (correctMatches) {
-                    matches.push(...correctMatches);
+                if (entry.includes('correctAnswer')) {
+                    // Get all potential matches that include 'correctAnswer'
+                    const allMatches = [...entry.matchAll(/<li[^>]*correctAnswer[^>]*>.*?<\/li>/gi)];
+                    if (allMatches.length > 0) {
+                        // Only push the last one
+                        const lastMatch = allMatches[allMatches.length - 1][0];
+                        matches.push(lastMatch);
+                    }
                 }
 
+                // Still include Đáp án: pattern
+                const dapAnPattern = /Đáp án:\s*([\s\S]*?)(<[^>]+>|\\n|\\r|$)/gi;
                 let m;
                 while ((m = dapAnPattern.exec(entry)) !== null) {
                     const answer = m[1].trim();
