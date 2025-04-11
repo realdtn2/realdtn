@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Show OLM Answers
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @description  Show answers that the website leaks
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -10,7 +10,7 @@
 
 (function () {
     'use strict';
-    // Inject MathJax
+
     const mathjaxScript = document.createElement('script');
     mathjaxScript.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js';
     mathjaxScript.async = true;
@@ -25,7 +25,6 @@
             const original = console[method];
             console[method] = function (...args) {
                 const timestamp = new Date().toISOString();
-
                 const combinedText = args.map(arg => {
                     try {
                         return typeof arg === 'object' ? JSON.stringify(arg) : String(arg);
@@ -61,23 +60,19 @@
                 }
             });
 
-            // Remove exact duplicates
             return [...new Set(matches)];
         }
 
         function cleanupLinkHtml(html) {
             const allLinks = html.match(/https:\/\/[^"'<> ]+/g);
-
             if (allLinks && allLinks.length > 0) {
                 const lastLink = allLinks[allLinks.length - 1]
                     .replace(/^"+/, '')
                     .replace(/"+$/, '')
                     .replace(/\\$/, '');
-
                 return lastLink;
             }
 
-            // Try to clean LaTeX-style MathJax code
             const latexMatch = html.match(/\\\\\((.+?)\\\\\)/);
             if (latexMatch) {
                 const unescaped = latexMatch[1]
@@ -96,11 +91,10 @@
             }
         }
 
-        // === UI ===
         const container = document.createElement('div');
         container.id = 'olm-answer-container';
         container.style.position = 'fixed';
-        container.style.top = '30px';
+        container.style.top = '50px';
         container.style.right = '10px';
         container.style.zIndex = 10000;
         container.style.backgroundColor = '#f0f0f0';
@@ -108,7 +102,7 @@
         container.style.borderRadius = '4px';
         container.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
         container.style.padding = '6px';
-        container.style.maxWidth = '240px';
+        container.style.maxWidth = '260px';
         container.style.fontFamily = 'sans-serif';
         container.style.fontSize = '12px';
         container.style.display = localStorage.getItem('olmAnswersVisible') === 'false' ? 'none' : 'block';
@@ -177,27 +171,30 @@
         container.appendChild(resultsPanel);
         document.body.appendChild(container);
 
-        // === Toggle Button ===
         const toggleButton = document.createElement('button');
         toggleButton.textContent = '☰';
         toggleButton.title = 'Toggle OLM Answers GUI';
         toggleButton.style.position = 'fixed';
-        toggleButton.style.top = '5px';
-        toggleButton.style.right = '5px';
-        toggleButton.style.width = '20px';
-        toggleButton.style.height = '20px';
+        toggleButton.style.top = '10px';
+        toggleButton.style.right = '10px';
+        toggleButton.style.width = '48px';
+        toggleButton.style.height = '48px';
         toggleButton.style.zIndex = 10001;
-        toggleButton.style.opacity = '0.05';
-        toggleButton.style.backgroundColor = 'transparent';
+        toggleButton.style.opacity = '0.6';
         toggleButton.style.border = 'none';
+        toggleButton.style.borderRadius = '24px';
+        toggleButton.style.backgroundColor = '#333';
+        toggleButton.style.color = '#fff';
+        toggleButton.style.fontSize = '24px';
+        toggleButton.style.fontWeight = 'bold';
         toggleButton.style.cursor = 'pointer';
-        toggleButton.style.fontSize = '14px';
+        toggleButton.style.transition = 'opacity 0.3s';
 
         toggleButton.onmouseenter = () => {
-            toggleButton.style.opacity = '0.2';
+            toggleButton.style.opacity = '0.9';
         };
         toggleButton.onmouseleave = () => {
-            toggleButton.style.opacity = '0.05';
+            toggleButton.style.opacity = '0.6';
         };
 
         toggleButton.onclick = () => {
@@ -206,6 +203,7 @@
             localStorage.setItem('olmAnswersVisible', !isVisible);
         };
 
+        document.body.appendChild(toggleButton);
         console.log('CorrectAnswer and Đáp án log capture started.');
     });
 })();
