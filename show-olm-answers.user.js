@@ -174,27 +174,36 @@
         const toggleButton = document.createElement('button');
         toggleButton.textContent = '☰';
         toggleButton.title = 'Toggle OLM Answers GUI';
-        toggleButton.style.position = 'fixed';
-        toggleButton.style.top = '10px';
-        toggleButton.style.right = '10px';
-        toggleButton.style.width = '48px';
-        toggleButton.style.height = '48px';
-        toggleButton.style.zIndex = 10001;
-        toggleButton.style.opacity = '0.6';
-        toggleButton.style.border = 'none';
-        toggleButton.style.borderRadius = '24px';
-        toggleButton.style.backgroundColor = '#333';
-        toggleButton.style.color = '#fff';
-        toggleButton.style.fontSize = '24px';
-        toggleButton.style.fontWeight = 'bold';
-        toggleButton.style.cursor = 'pointer';
-        toggleButton.style.transition = 'opacity 0.3s';
+        toggleButton.id = 'olm-toggle-btn';
+
+        Object.assign(toggleButton.style, {
+            position: 'fixed',
+            top: '10px',
+            right: '10px',
+            width: '60px',
+            height: '60px',
+            zIndex: '999999', // super high to float above all
+            opacity: '0.8',
+            border: 'none',
+            borderRadius: '50%',
+            backgroundColor: '#222',
+            color: '#fff',
+            fontSize: '30px',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'opacity 0.3s, transform 0.2s',
+            touchAction: 'manipulation',
+        });
 
         toggleButton.onmouseenter = () => {
-            toggleButton.style.opacity = '0.9';
+            toggleButton.style.opacity = '1';
         };
         toggleButton.onmouseleave = () => {
-            toggleButton.style.opacity = '0.6';
+            toggleButton.style.opacity = '0.8';
         };
 
         toggleButton.onclick = () => {
