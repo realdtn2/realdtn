@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Show OLM Answers
 // @namespace    http://tampermonkey.net/
-// @version      1.7
+// @version      1.4
 // @description  Show answers that the website leaks
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -108,18 +108,7 @@
         container.style.borderRadius = '4px';
         container.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
         container.style.padding = '6px';
-
-        container.style.width = 'min(90vw, 300px)';
-        container.style.resize = 'none';
-        container.style.overflow = 'auto';
-
-        container.style.display = 'flex';
-        container.style.flexDirection = 'column';
-        container.style.alignItems = 'stretch';
-
-        container.style.direction = 'rtl';
-        container.style.textAlign = 'left';
-
+        container.style.maxWidth = '260px';
         container.style.fontFamily = 'sans-serif';
         container.style.fontSize = '12px';
         container.style.display = localStorage.getItem('olmAnswersVisible') === 'false' ? 'none' : 'block';
@@ -128,7 +117,6 @@
         buttonRow.style.display = 'flex';
         buttonRow.style.flexWrap = 'wrap';
         buttonRow.style.gap = '4px';
-        buttonRow.style.direction = 'ltr';
 
         const showBtn = document.createElement('button');
         showBtn.textContent = 'Show Answers';
@@ -148,22 +136,6 @@
         resultsPanel.style.borderTop = '1px solid #ccc';
         resultsPanel.style.display = 'none';
         resultsPanel.style.backgroundColor = '#fff';
-        resultsPanel.style.direction = 'ltr';
-        resultsPanel.style.flex = '1';
-        resultsPanel.style.overflowY = 'auto';
-
-        const resizeHandle = document.createElement('div');
-        resizeHandle.style.width = '20px';
-        resizeHandle.style.height = '20px';
-        resizeHandle.style.position = 'absolute';
-        resizeHandle.style.right = '0';
-        resizeHandle.style.bottom = '0';
-        resizeHandle.style.cursor = 'nwse-resize';
-        resizeHandle.style.background = '#aaa';
-        resizeHandle.style.zIndex = '1000';
-        resizeHandle.style.touchAction = 'none'; // Prevent browser scrolling
-
-
 
         showBtn.onclick = () => {
             const answers = extractCorrectAnswers();
@@ -203,63 +175,7 @@
         buttonRow.appendChild(clearBtn);
         container.appendChild(buttonRow);
         container.appendChild(resultsPanel);
-        container.appendChild(resizeHandle);
         document.body.appendChild(container);
-
-        let isResizing = false;
-        let startX, startY, startWidth, startHeight;
-        
-        function getClientCoords(e) {
-          if (e.touches) {
-            return { x: e.touches[0].clientX, y: e.touches[0].clientY };
-          }
-          return { x: e.clientX, y: e.clientY };
-        }
-        
-        function startResize(e) {
-          e.preventDefault();
-          isResizing = true;
-          const coords = getClientCoords(e);
-          startX = coords.x;
-          startY = coords.y;
-          startWidth = parseInt(window.getComputedStyle(container).width, 10);
-          startHeight = parseInt(window.getComputedStyle(container).height, 10);
-          document.body.style.touchAction = 'none'; // Disable gestures
-        }
-        
-        function doResize(e) {
-          if (!isResizing) return;
-          const coords = getClientCoords(e);
-          const dx = coords.x - startX;
-          const dy = coords.y - startY;
-          container.style.width = `${Math.max(100, startWidth + dx)}px`;
-          container.style.height = `${Math.max(100, startHeight + dy)}px`;
-        }
-        
-        function stopResize() {
-          isResizing = false;
-          document.body.style.touchAction = ''; // Re-enable gestures
-        }
-        
-        resizeHandle.addEventListener('mousedown', startResize);
-        resizeHandle.addEventListener('touchstart', startResize, { passive: false });
-        
-        window.addEventListener('mousemove', doResize);
-        window.addEventListener('touchmove', doResize, { passive: false });
-        
-        window.addEventListener('mouseup', stopResize);
-        window.addEventListener('touchend', stopResize);
-
-        const responsiveStyle = document.createElement('style');
-        responsiveStyle.textContent = `
-        @media (max-width: 600px) {
-            #olm-answer-container {
-                width: 95vw !important;
-                max-height: 60vh !important;
-            }
-        }
-        `;
-        document.head.appendChild(responsiveStyle);
 
         const toggleButton = document.createElement('button');
         toggleButton.textContent = '☰';
