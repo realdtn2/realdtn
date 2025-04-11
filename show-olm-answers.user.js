@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Show OLM Answers
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  Show answers that the website leaks
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -110,8 +110,7 @@
         container.style.padding = '6px';
 
         container.style.width = 'min(90vw, 300px)';
-        container.style.height = '300px';
-        container.style.resize = 'both';
+        container.style.resize = 'none';
         container.style.overflow = 'hidden';
 
         container.style.display = 'flex';
@@ -153,6 +152,20 @@
         resultsPanel.style.flex = '1';
         resultsPanel.style.overflowY = 'auto';
 
+        const resizeHandle = document.createElement('div');
+        resizeHandle.style.width = '20px';
+        resizeHandle.style.height = '20px';
+        resizeHandle.style.position = 'absolute';
+        resizeHandle.style.right = '0';
+        resizeHandle.style.bottom = '0';
+        resizeHandle.style.cursor = 'nwse-resize';
+        resizeHandle.style.background = '#888';
+        resizeHandle.style.zIndex = '1000';
+        resizeHandle.style.touchAction = 'none';
+        resizeHandle.title = 'Drag to resize';
+
+
+
         showBtn.onclick = () => {
             const answers = extractCorrectAnswers();
             resultsPanel.innerHTML = '';
@@ -191,7 +204,46 @@
         buttonRow.appendChild(clearBtn);
         container.appendChild(buttonRow);
         container.appendChild(resultsPanel);
+        container.appendChild(resizeHandle);
         document.body.appendChild(container);
+
+        let isResizing = false;
+        let startX, startY, startWidth, startHeight;
+        
+        function startResize(e) {
+            e.preventDefault();
+            isResizing = true;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            startX = clientX;
+            startY = clientY;
+            startWidth = parseInt(window.getComputedStyle(container).width, 10);
+            startHeight = parseInt(window.getComputedStyle(container).height, 10);
+            document.body.style.touchAction = 'none';
+        }
+        
+        function stopResize() {
+            isResizing = false;
+            document.body.style.touchAction = '';
+        }
+        
+        function doResize(e) {
+            if (!isResizing) return;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const dx = clientX - startX;
+            const dy = clientY - startY;
+            container.style.width = `${Math.max(100, startWidth + dx)}px`;
+            container.style.height = `${Math.max(100, startHeight + dy)}px`;
+        }
+        
+        // Add event listeners
+        resizeHandle.addEventListener('mousedown', startResize);
+        resizeHandle.addEventListener('touchstart', startResize, { passive: false });
+        window.addEventListener('mousemove', doResize);
+        window.addEventListener('touchmove', doResize, { passive: false });
+        window.addEventListener('mouseup', stopResize);
+        window.addEventListener('touchend', stopResize);
 
         const responsiveStyle = document.createElement('style');
         responsiveStyle.textContent = `
