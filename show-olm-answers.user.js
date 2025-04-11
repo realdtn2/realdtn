@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Show OLM Answers
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.6.1
 // @description  Show answers that the website leaks
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -111,7 +111,7 @@
 
         container.style.width = 'min(90vw, 300px)';
         container.style.resize = 'none';
-        container.style.overflow = 'hidden';
+        container.style.overflow = 'auto';
 
         container.style.display = 'flex';
         container.style.flexDirection = 'column';
@@ -159,10 +159,9 @@
         resizeHandle.style.right = '0';
         resizeHandle.style.bottom = '0';
         resizeHandle.style.cursor = 'nwse-resize';
-        resizeHandle.style.background = '#888';
+        resizeHandle.style.background = '#aaa';
         resizeHandle.style.zIndex = '1000';
-        resizeHandle.style.touchAction = 'none';
-        resizeHandle.title = 'Drag to resize';
+        resizeHandle.style.touchAction = 'none'; // Prevent browser scrolling
 
 
 
@@ -210,38 +209,44 @@
         let isResizing = false;
         let startX, startY, startWidth, startHeight;
         
-        function startResize(e) {
-            e.preventDefault();
-            isResizing = true;
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            startX = clientX;
-            startY = clientY;
-            startWidth = parseInt(window.getComputedStyle(container).width, 10);
-            startHeight = parseInt(window.getComputedStyle(container).height, 10);
-            document.body.style.touchAction = 'none';
+        function getClientCoords(e) {
+          if (e.touches) {
+            return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+          }
+          return { x: e.clientX, y: e.clientY };
         }
         
-        function stopResize() {
-            isResizing = false;
-            document.body.style.touchAction = '';
+        function startResize(e) {
+          e.preventDefault();
+          isResizing = true;
+          const coords = getClientCoords(e);
+          startX = coords.x;
+          startY = coords.y;
+          startWidth = parseInt(window.getComputedStyle(container).width, 10);
+          startHeight = parseInt(window.getComputedStyle(container).height, 10);
+          document.body.style.touchAction = 'none'; // Disable gestures
         }
         
         function doResize(e) {
-            if (!isResizing) return;
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            const dx = clientX - startX;
-            const dy = clientY - startY;
-            container.style.width = `${Math.max(100, startWidth + dx)}px`;
-            container.style.height = `${Math.max(100, startHeight + dy)}px`;
+          if (!isResizing) return;
+          const coords = getClientCoords(e);
+          const dx = coords.x - startX;
+          const dy = coords.y - startY;
+          container.style.width = `${Math.max(100, startWidth + dx)}px`;
+          container.style.height = `${Math.max(100, startHeight + dy)}px`;
         }
         
-        // Add event listeners
+        function stopResize() {
+          isResizing = false;
+          document.body.style.touchAction = ''; // Re-enable gestures
+        }
+        
         resizeHandle.addEventListener('mousedown', startResize);
         resizeHandle.addEventListener('touchstart', startResize, { passive: false });
+        
         window.addEventListener('mousemove', doResize);
         window.addEventListener('touchmove', doResize, { passive: false });
+        
         window.addEventListener('mouseup', stopResize);
         window.addEventListener('touchend', stopResize);
 
