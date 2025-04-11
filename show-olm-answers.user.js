@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Show OLM Answers
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  Show answers that the website leaks
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -108,7 +108,19 @@
         container.style.borderRadius = '4px';
         container.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
         container.style.padding = '6px';
-        container.style.maxWidth = '260px';
+
+        container.style.width = 'min(90vw, 300px)';
+        container.style.height = '300px';
+        container.style.resize = 'both';
+        container.style.overflow = 'hidden';
+
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+        container.style.alignItems = 'stretch';
+
+        container.style.direction = 'rtl';
+        container.style.textAlign = 'left';
+
         container.style.fontFamily = 'sans-serif';
         container.style.fontSize = '12px';
         container.style.display = localStorage.getItem('olmAnswersVisible') === 'false' ? 'none' : 'block';
@@ -117,6 +129,7 @@
         buttonRow.style.display = 'flex';
         buttonRow.style.flexWrap = 'wrap';
         buttonRow.style.gap = '4px';
+        buttonRow.style.direction = 'ltr';
 
         const showBtn = document.createElement('button');
         showBtn.textContent = 'Show Answers';
@@ -136,6 +149,9 @@
         resultsPanel.style.borderTop = '1px solid #ccc';
         resultsPanel.style.display = 'none';
         resultsPanel.style.backgroundColor = '#fff';
+        resultsPanel.style.direction = 'ltr';
+        resultsPanel.style.flex = '1';
+        resultsPanel.style.overflowY = 'auto';
 
         showBtn.onclick = () => {
             const answers = extractCorrectAnswers();
@@ -176,6 +192,17 @@
         container.appendChild(buttonRow);
         container.appendChild(resultsPanel);
         document.body.appendChild(container);
+
+        const responsiveStyle = document.createElement('style');
+        responsiveStyle.textContent = `
+        @media (max-width: 600px) {
+            #olm-answer-container {
+                width: 95vw !important;
+                max-height: 60vh !important;
+            }
+        }
+        `;
+        document.head.appendChild(responsiveStyle);
 
         const toggleButton = document.createElement('button');
         toggleButton.textContent = '☰';
