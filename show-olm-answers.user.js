@@ -6,6 +6,8 @@
 // @author       realdtn
 // @match        *://*.olm.vn/*
 // @grant        none
+// @updateURL    https://raw.githubusercontent.com/realdtn2/realdtn/main/show-olm-answers.user.js
+// @downloadURL  https://raw.githubusercontent.com/realdtn2/realdtn/main/show-olm-answers.user.js
 // ==/UserScript==
 
 (function () {
