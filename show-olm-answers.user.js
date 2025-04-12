@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Show OLM Answers
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  Show answers that the website leaks
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -35,10 +35,7 @@
                     }
                 }).join(' ');
 
-                if (combinedText.includes(filterKeyword)) {
-                    logStorage.push(`[${timestamp}] ${combinedText}`);
-                }
-
+                logStorage.push(`[${timestamp}] ${combinedText}`);
                 original.apply(console, args);
             };
         });
@@ -48,16 +45,13 @@
 
             logStorage.forEach(entry => {
                 if (entry.includes('correctAnswer')) {
-                    // Get all potential matches that include 'correctAnswer'
                     const allMatches = [...entry.matchAll(/<li[^>]*correctAnswer[^>]*>.*?<\/li>/gi)];
                     if (allMatches.length > 0) {
-                        // Only push the last one
                         const lastMatch = allMatches[allMatches.length - 1][0];
                         matches.push(lastMatch);
                     }
                 }
 
-                // Still include Đáp án: pattern
                 const dapAnPattern = /Đáp án:\s*([\s\S]*?)(<[^>]+>|\\n|\\r|$)/gi;
                 let m;
                 while ((m = dapAnPattern.exec(entry)) !== null) {
@@ -73,18 +67,18 @@
             const allLinks = html.match(/https:\/\/[^"'<> ]+/g);
             if (allLinks && allLinks.length > 0) {
                 const lastLink = allLinks[allLinks.length - 1]
-                    .replace(/^"+/, '')
-                    .replace(/"+$/, '')
-                    .replace(/\\$/, '');
+                .replace(/^"+/, '')
+                .replace(/"+$/, '')
+                .replace(/\\$/, '');
                 return lastLink;
             }
 
             const latexMatch = html.match(/\\\\\((.+?)\\\\\)/);
             if (latexMatch) {
                 const unescaped = latexMatch[1]
-                    .replace(/\\{/g, '{')
-                    .replace(/\\}/g, '}')
-                    .replace(/\\\\/g, '\\');
+                .replace(/\\{/g, '{')
+                .replace(/\\}/g, '}')
+                .replace(/\\\\/g, '\\');
                 return `\\(${unescaped}\\)`;
             }
 
@@ -99,19 +93,21 @@
 
         const container = document.createElement('div');
         container.id = 'olm-answer-container';
-        container.style.position = 'fixed';
-        container.style.top = '50px';
-        container.style.right = '10px';
-        container.style.zIndex = 10000;
-        container.style.backgroundColor = '#f0f0f0';
-        container.style.border = '1px solid #aaa';
-        container.style.borderRadius = '4px';
-        container.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
-        container.style.padding = '6px';
-        container.style.maxWidth = '260px';
-        container.style.fontFamily = 'sans-serif';
-        container.style.fontSize = '12px';
-        container.style.display = localStorage.getItem('olmAnswersVisible') === 'false' ? 'none' : 'block';
+        Object.assign(container.style, {
+            position: 'fixed',
+            top: '50px',
+            right: '10px',
+            zIndex: 10000,
+            backgroundColor: '#f0f0f0',
+            border: '1px solid #aaa',
+            borderRadius: '4px',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+            padding: '6px',
+            maxWidth: '260px',
+            fontFamily: 'sans-serif',
+            fontSize: '12px',
+            display: localStorage.getItem('olmAnswersVisible') === 'false' ? 'none' : 'block'
+        });
 
         const buttonRow = document.createElement('div');
         buttonRow.style.display = 'flex';
@@ -128,6 +124,11 @@
         clearBtn.style.flex = '1';
         clearBtn.style.fontSize = '12px';
 
+        const logBtn = document.createElement('button');
+        logBtn.textContent = 'Show Logs';
+        logBtn.style.flex = '1';
+        logBtn.style.fontSize = '12px';
+
         const resultsPanel = document.createElement('div');
         resultsPanel.style.maxHeight = '200px';
         resultsPanel.style.overflowY = 'auto';
@@ -137,9 +138,20 @@
         resultsPanel.style.display = 'none';
         resultsPanel.style.backgroundColor = '#fff';
 
+        const logPanel = document.createElement('div');
+        logPanel.style.maxHeight = '200px';
+        logPanel.style.overflowY = 'auto';
+        logPanel.style.marginTop = '6px';
+        logPanel.style.padding = '4px';
+        logPanel.style.borderTop = '1px solid #ccc';
+        logPanel.style.display = 'none';
+        logPanel.style.backgroundColor = '#eee';
+        logPanel.style.whiteSpace = 'pre-wrap';
+
         showBtn.onclick = () => {
             const answers = extractCorrectAnswers();
             resultsPanel.innerHTML = '';
+            logPanel.style.display = 'none';
 
             if (answers.length === 0) {
                 resultsPanel.innerHTML = '<em>No answers found.</em>';
@@ -166,15 +178,33 @@
         clearBtn.onclick = () => {
             logStorage.length = 0;
             resultsPanel.innerHTML = '';
+            logPanel.innerHTML = '';
             resultsPanel.style.display = 'none';
+            logPanel.style.display = 'none';
             console.clear();
             console.log('Filtered logs cleared!');
         };
 
+        logBtn.onclick = () => {
+            const latexified = logStorage.map(line => {
+                return line
+                    .replace(/\$\$(.+?)\$\$/g, (_, expr) => `\\[${expr}\\]`)
+                    .replace(/\$(.+?)\$/g, (_, expr) => `\\(${expr}\\)`)
+                    .replace(/\\n|\\r/g, '<br>'); // optional: keep line breaks clean
+            }).join('<br>');
+        
+            logPanel.innerHTML = latexified || '<em>No logs captured.</em>';
+            logPanel.style.display = 'block';
+            resultsPanel.style.display = 'none';
+            renderMathJax(logPanel); // render LaTeX after formatting
+        };        
+
         buttonRow.appendChild(showBtn);
         buttonRow.appendChild(clearBtn);
+        buttonRow.appendChild(logBtn);
         container.appendChild(buttonRow);
         container.appendChild(resultsPanel);
+        container.appendChild(logPanel);
         document.body.appendChild(container);
 
         const toggleButton = document.createElement('button');
@@ -184,11 +214,11 @@
 
         Object.assign(toggleButton.style, {
             position: 'fixed',
-            top: '10px',
+            top: '60px', // moved down
             right: '10px',
             width: '30px',
             height: '30px',
-            zIndex: '999999', // super high to float above all
+            zIndex: '999999',
             opacity: '0.2',
             border: 'none',
             borderRadius: '50%',
