@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OLM Answers Sniffers
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  Sniff answers from the network requests
 // @author       realdtn
 // @match        *://*.olm.vn/*
