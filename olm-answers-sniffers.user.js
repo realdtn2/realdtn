@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         OLM Answers Sniffers
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Sniffers answers from the network requests
+// @version      1.1
+// @description  Sniff answers from the network requests
 // @author       realdtn
 // @match        *://*.olm.vn/*
 // @grant        none
@@ -51,6 +51,13 @@
                     }
                 }
             }
+            // Also capture input data-accept in trigger-curriculum-cate spans
+            else if (line.includes('<span class="trigger-curriculum-cate">')) {
+                const inputMatch = line.match(/<input[^>]*data-accept="([^"]+)"[^>]*>/);
+                if (inputMatch) {
+                    answers.push(inputMatch[1].trim());
+                }
+            }
         }
         return answers;
     }
@@ -61,46 +68,232 @@
 
         let question = '[No question]';
         let correctAnswers = [];
+        let dapAn = null;
 
-        const lines = div.innerHTML.split('\n').map(l => l.trim()).filter(Boolean);
-        for (let i = 1; i < lines.length; i++) {
-            if (lines[i].includes('<input') && lines[i].includes('data-accept=')) {
-                let prevLine = lines[i - 1].replace(/<[^>]*>/g, '').trim();
-                if (prevLine) {
-                    question = prevLine;
+        const lines = div.innerHTML.split('\n');
+
+        // Special case for trigger-curriculum-cate span with input data-accept
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes('<span class="trigger-curriculum-cate">')) {
+                const spanIndex = lines[i].indexOf('<span class="trigger-curriculum-cate">');
+                question = lines[i].substring(0, spanIndex).trim();
+
+                // Extract answer from data-accept attribute
+                const inputMatch = lines[i].match(/<input[^>]*data-accept="([^"]+)"[^>]*>/);
+                if (inputMatch) {
+                    correctAnswers = [inputMatch[1].trim()];
+                    dapAn = inputMatch[1].trim();
                 }
                 break;
             }
         }
 
-        const listToCheck = div.querySelector('.quiz-list.trigger-curriculum-catemake') ||
-                            div.querySelector('.true-false.trigger-curriculum-cate');
-
-        if (listToCheck) {
-            const correctItems = listToCheck.querySelectorAll('li.correctAnswer');
-            correctAnswers = Array.from(correctItems).map(li => li.innerText.trim());
-        } else {
-            const single = div.querySelector('li.correctAnswer');
-            if (single) correctAnswers.push(single.innerText.trim());
-        }
-
-        let dapAn = null;
-        for (let i = 0; i < lines.length; i++) {
-            if (lines[i].includes('Đáp án:')) {
-                const match = lines[i].match(/Đáp án\s*:\s*(.*)/i);
-                if (match) {
-                    const inputMatch = lines[i].match(/<input[^>]*data-accept="([^"]+)"[^>]*>/);
-                    if (inputMatch) {
-                        dapAn = inputMatch[1].trim();
+        // Special case for true-false questions
+        if (html.includes("<ol class='true-false") || html.includes('<ol class="true-false')) {
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].includes("<ol class='true-false") || lines[i].includes('<ol class="true-false')) {
+                    // Question is everything before the <ol class='true-false'
+                    const olIndex = lines[i].indexOf("<ol class='true-false");
+                    if (olIndex === -1) {
+                        const olIndex2 = lines[i].indexOf('<ol class="true-false');
+                        if (olIndex2 !== -1) {
+                            question = lines[i].substring(0, olIndex2).trim();
+                        }
                     } else {
-                        dapAn = match[1].trim();
+                        question = lines[i].substring(0, olIndex).trim();
+                    }
+
+                    // Extract all correct answers from the true-false list
+                    const trueFalseDiv = div.querySelector('ol[class*="true-false"]');
+                    if (trueFalseDiv) {
+                        const correctItems = trueFalseDiv.querySelectorAll('li.correctAnswer');
+                        correctAnswers = Array.from(correctItems).map(li => li.innerHTML.trim());
                     }
                     break;
                 }
             }
+            return {
+                question: question.replace(/<[^>]+>/g, '').trim(),
+                correctAnswers,
+                dapAn: correctAnswers.join(', ')
+            };
         }
 
-        return { question, correctAnswers, dapAn };
+        // Handle the case with multiple questions separated by <hr> tags
+        if (html.includes('<hr id=')) {
+            const sections = html.split('<hr id=');
+            if (sections.length > 1) {
+                // Process the first section (main question)
+                const mainSection = sections[0];
+                const mainLines = mainSection.split('\n');
+                for (let i = 0; i < mainLines.length; i++) {
+                    if (mainLines[i].includes('<p dir="ltr" style="text-align: justify;">')) {
+                        question = mainLines[i].replace(/<[^>]+>/g, '').trim();
+                        break;
+                    }
+                }
+
+                // Process each subsequent section (sub-questions)
+                const results = [];
+                for (let i = 1; i < sections.length; i++) {
+                    const sectionHtml = '<hr id=' + sections[i];
+                    const sectionDiv = document.createElement('div');
+                    sectionDiv.innerHTML = sectionHtml;
+
+                    let subQuestion = '';
+                    let subAnswers = [];
+                    let subDapAn = null;
+
+                    // Extract question from <p> tags
+                    const pTags = sectionDiv.querySelectorAll('p[dir="ltr"][style*="text-align: justify;"]');
+                    if (pTags.length > 0) {
+                        subQuestion = Array.from(pTags).map(p => p.textContent.trim()).join(' ');
+                    }
+
+                    // Extract answer from input data-accept
+                    const input = sectionDiv.querySelector('input[data-accept]');
+                    if (input) {
+                        subAnswers = [input.getAttribute('data-accept').trim()];
+                        subDapAn = input.getAttribute('data-accept').trim();
+                    }
+
+                    // Extract answer from explanation if not found in input
+                    if (!subDapAn) {
+                        const expDiv = sectionDiv.querySelector('.exp');
+                        if (expDiv) {
+                            const expText = expDiv.textContent;
+                            const match = expText.match(/Đáp án\s*:\s*(.*)/i);
+                            if (match) {
+                                subDapAn = match[1].trim();
+                                if (subAnswers.length === 0) {
+                                    subAnswers = [subDapAn];
+                                }
+                            }
+                        }
+                    }
+
+                    if (subQuestion || subAnswers.length || subDapAn) {
+                        results.push({
+                            question: subQuestion.replace(/<[^>]+>/g, '').trim(),
+                            correctAnswers: subAnswers,
+                            dapAn: subDapAn || ''
+                        });
+                    }
+                }
+
+                // Return the first result if only one sub-question, or all if multiple
+                if (results.length === 1) {
+                    return results[0];
+                } else if (results.length > 1) {
+                    // Return the main question first, then sub-questions
+                    const allResults = [{
+                        question: question.replace(/<[^>]+>/g, '').trim(),
+                        correctAnswers: [],
+                        dapAn: ''
+                    }].concat(results);
+                    return allResults;
+                }
+            }
+        }
+
+        // Original cases (fallbacks)
+        if (question === '[No question]') {
+            // Handle the case where question is formatted with <p dir="ltr"><span style="white-space: pre-wrap;">
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                if (line.includes('<p dir="ltr"><span style="white-space: pre-wrap;">')) {
+                    const startTag = '<p dir="ltr"><span style="white-space: pre-wrap;">';
+                    const startIndex = line.indexOf(startTag);
+                    if (startIndex !== -1) {
+                        const contentStart = startIndex + startTag.length;
+                        const endIndex = line.indexOf('</span>', contentStart);
+                        if (endIndex !== -1) {
+                            question = line.substring(contentStart, endIndex).trim();
+                        }
+                    }
+                    break;
+                }
+            }
+
+            // Handle the case where question is formatted with <ol class='quiz-list'>
+            if (question === '[No question]') {
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    if (line.includes("<ol class='quiz-list'") || line.includes('<ol class="quiz-list"')) {
+                        const olIndex = line.indexOf("<ol class='quiz-list'");
+                        if (olIndex === -1) {
+                            const olIndex2 = line.indexOf('<ol class="quiz-list"');
+                            if (olIndex2 !== -1) {
+                                question = line.substring(0, olIndex2).trim();
+                            }
+                        } else {
+                            question = line.substring(0, olIndex).trim();
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Fallback to original extraction methods if not found in other formats
+            if (question === '[No question]') {
+                const cleanLines = div.innerHTML.split('\n').map(l => l.trim()).filter(Boolean);
+                for (let i = 1; i < cleanLines.length; i++) {
+                    if (cleanLines[i].includes('<input') && cleanLines[i].includes('data-accept=')) {
+                        let prevLine = cleanLines[i - 1].replace(/<[^>]*>/g, '').trim();
+                        if (prevLine) {
+                            question = prevLine;
+                        }
+                        const inputMatch = cleanLines[i].match(/data-accept="([^"]+)"/);
+                        if (inputMatch) {
+                            correctAnswers = [inputMatch[1].trim()];
+                            dapAn = inputMatch[1].trim();
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Extract correct answers using default method if not already found
+            if (correctAnswers.length === 0) {
+                const listToCheck = div.querySelector('.quiz-list.trigger-curriculum-catemake') ||
+                      div.querySelector('.true-false.trigger-curriculum-cate');
+
+                if (listToCheck) {
+                    const correctItems = listToCheck.querySelectorAll('li.correctAnswer');
+                    correctAnswers = Array.from(correctItems).map(li => li.innerHTML.trim());
+                } else {
+                    const single = div.querySelector('li.correctAnswer');
+                    if (single) correctAnswers.push(single.innerHTML.trim());
+                }
+            }
+
+            // Extract Đáp án if not already found
+            if (!dapAn) {
+                for (let i = 0; i < lines.length; i++) {
+                    if (lines[i].includes('Đáp án:')) {
+                        const match = lines[i].match(/Đáp án\s*:\s*(.*)/i);
+                        if (match) {
+                            const inputMatch = lines[i].match(/<input[^>]*data-accept="([^"]+)"[^>]*>/);
+                            if (inputMatch) {
+                                dapAn = inputMatch[1].trim();
+                            } else {
+                                dapAn = match[1].trim();
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clean up question text - remove HTML tags but preserve line breaks for formatting
+        question = question.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+        return {
+            question: question,
+            correctAnswers,
+            dapAn: dapAn || (correctAnswers.length ? correctAnswers.join(', ') : '')
+        };
     }
 
     function processResponse(json) {
@@ -130,30 +323,64 @@
         html = convertDollarLatexToMathJax(html);
         allRawDecoded.push(html + '\n\n');
 
-        const { question, correctAnswers, dapAn } = extractQuestionAndAnswer(html);
-        const formatted = `Question ${questionCounter++}: ${question}\nAnswer(s):\n${correctAnswers.map(ans => `- ${ans}`).join('\n') || '[None]'}\nDap An: ${dapAn ?? '[None]'}\n\n`;
+        // First try to handle as multiple questions
+        if (html.includes('<hr id=')) {
+            const sections = html.split('<hr id=');
+            if (sections.length > 1) {
+                // Process the first section (main question)
+                const mainSection = sections[0];
+                const mainResult = extractQuestionAndAnswer(mainSection);
+                if (mainResult.question && mainResult.question !== '[No question]') {
+                    addToResults(mainResult);
+                }
+
+                // Process each subsequent section (sub-questions)
+                for (let i = 1; i < sections.length; i++) {
+                    const sectionHtml = '<hr id=' + sections[i];
+                    const result = extractQuestionAndAnswer(sectionHtml);
+
+                    // Handle case where extractQuestionAndAnswer returns an array of results
+                    if (Array.isArray(result)) {
+                        result.forEach(r => addToResults(r));
+                    } else if (result.question && result.question !== '[No question]') {
+                        addToResults(result);
+                    }
+                }
+                return;
+            }
+        }
+
+        // Fallback to single question processing
+        const result = extractQuestionAndAnswer(html);
+        if (Array.isArray(result)) {
+            result.forEach(r => addToResults(r));
+        } else {
+            addToResults(result);
+        }
+    }
+
+    function addToResults(result) {
+        const { question, correctAnswers, dapAn } = result;
+
+        // Build parts conditionally
+        const answerPart = correctAnswers.length > 0
+            ? `Answer(s):\n${correctAnswers.map(ans => `- ${ans}`).join('\n')}`
+            : '';
+        const dapAnPart = dapAn ? `Dap An: ${dapAn}` : '';
+
+        // Format with single newlines between sections
+        let formatted = `Question ${questionCounter++}: ${question}`;
+        if (answerPart) formatted += `\n${answerPart}`;
+        if (dapAnPart) formatted += `\n${dapAnPart}`;
+        formatted += '\n'; // Single newline at end
 
         if (correctAnswers.length || dapAn) {
             allParsedCorrect.push(formatted);
         }
 
-        const dapAnList = extractDapAnFromHTML(html);
-        allDapAnOnly.push(...dapAnList);
-
-        const subQuestions = html.split('<hr').filter(item => item.includes('<ol'));
-        subQuestions.forEach(subHtml => {
-            subHtml = convertDollarLatexToMathJax(subHtml);
-            const { question, correctAnswers, dapAn } = extractQuestionAndAnswer(subHtml);
-            const cleanQuestion = question.replace(/\(Sub-question.*?\)/i, '').trim();
-            const formattedSub = `Question ${questionCounter++}: ${cleanQuestion}\nAnswer(s):\n${correctAnswers.map(ans => `- ${ans}`).join('\n') || '[None]'}\nDap An: ${dapAn ?? '[None]'}\n\n`;
-
-            if (correctAnswers.length || dapAn) {
-                allParsedCorrect.push(formattedSub);
-            }
-
-            const subDaps = extractDapAnFromHTML(subHtml);
-            allDapAnOnly.push(...subDaps);
-        });
+        if (dapAn) {
+            allDapAnOnly.push(dapAn);
+        }
     }
 
     function createGUI() {
@@ -238,7 +465,7 @@
         });
 
         answerTab.onclick = () => {
-            contentArea.innerHTML = allParsedCorrect.join('<br><br>').replace(/\n/g, '<br>');
+            contentArea.innerHTML = allParsedCorrect.join('<br>').replace(/\n/g, '<br>');
             if (window.MathJax) MathJax.typesetPromise([contentArea]);
         };
 
@@ -268,6 +495,8 @@
         #content-area img {
             max-width: 100%;
             height: auto;
+            display: block;
+            margin: 10px 0;
         }
     `;
         document.head.appendChild(style);
@@ -275,6 +504,10 @@
         const mj = document.createElement('script');
         mj.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js';
         mj.async = true;
+        mj.onload = () => {
+            // Force MathJax to render all content after it's loaded
+            MathJax.typesetPromise([contentArea]);
+        };
         document.head.appendChild(mj);
     }
 
