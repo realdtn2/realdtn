@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OLM Answers Sniffers
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @description  Sniff answers from the network requests
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -72,20 +72,58 @@
 
         const lines = div.innerHTML.split('\n');
 
-        // Special case for trigger-curriculum-cate span with input data-accept
-        for (let i = 0; i < lines.length; i++) {
-            if (lines[i].includes('<span class="trigger-curriculum-cate">')) {
-                const spanIndex = lines[i].indexOf('<span class="trigger-curriculum-cate">');
-                question = lines[i].substring(0, spanIndex).trim();
+        // Special case for multiple trigger-curriculum-cate spans with input data-accept
+        const triggerCurriculumCates = div.querySelectorAll('span.trigger-curriculum-cate');
+        if (triggerCurriculumCates.length > 0) {
+            // Collect all questions and answers from these spans
+            const results = [];
 
-                // Extract answer from data-accept attribute
-                const inputMatch = lines[i].match(/<input[^>]*data-accept="([^"]+)"[^>]*>/);
-                if (inputMatch) {
-                    correctAnswers = [inputMatch[1].trim()];
-                    dapAn = inputMatch[1].trim();
-                }
-                break;
+            // First find all the input data-accept values
+            const allInputs = div.querySelectorAll('span.trigger-curriculum-cate input[data-accept]');
+            if (allInputs.length > 0) {
+                correctAnswers = Array.from(allInputs).map(input => input.getAttribute('data-accept').trim());
+                dapAn = correctAnswers.join(', ');
             }
+
+            // Now find all the questions (text before each trigger-curriculum-cate span)
+            let currentQuestion = '';
+            const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT, null, false);
+            let node;
+
+            while (node = walker.nextNode()) {
+                const text = node.nodeValue.trim();
+                if (text) {
+                    currentQuestion += ' ' + text;
+                }
+
+                if (node.parentNode && node.parentNode.classList &&
+                    node.parentNode.classList.contains('trigger-curriculum-cate')) {
+                    if (currentQuestion.trim()) {
+                        results.push({
+                            question: currentQuestion.trim(),
+                            correctAnswers: [],
+                            dapAn: node.parentNode.querySelector('input[data-accept]')?.getAttribute('data-accept') || ''
+                        });
+                        currentQuestion = '';
+                    }
+                }
+            }
+
+            // If we found multiple questions with answers, return them all
+            if (results.length > 1) {
+                // Filter out empty questions and combine answers
+                const filteredResults = results.filter(r => r.question && r.question !== '[No question]');
+                if (filteredResults.length > 0) {
+                    // Combine all answers from all questions
+                    const allAnswers = filteredResults.map(r => r.dapAn).filter(a => a);
+                    return filteredResults.map((r, i) => ({
+                        question: r.question,
+                        correctAnswers: allAnswers[i] ? [allAnswers[i]] : [],
+                        dapAn: allAnswers[i] || 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)'
+                    }));
+                }
+            }
+            // Otherwise fall through to normal processing
         }
 
         // Special case for true-false questions
@@ -115,7 +153,44 @@
             return {
                 question: question.replace(/<[^>]+>/g, '').trim(),
                 correctAnswers,
-                dapAn: correctAnswers.join(', ')
+                dapAn: correctAnswers.length ? correctAnswers.join(', ') : 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)'
+            };
+        }
+
+        // Handle quiz-list cases (including those without correct answers)
+        if (html.includes("<ol class='quiz-list") || html.includes('<ol class="quiz-list"')) {
+            // Find the question text before the quiz-list
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].includes("<ol class='quiz-list") || lines[i].includes('<ol class="quiz-list"')) {
+                    // Backtrack to find the question line before <ol>
+                    for (let j = i - 1; j >= 0; j--) {
+                        if (lines[j].includes('<p') || lines[j].trim() !== '') {
+                            question = lines[j].replace(/<[^>]+>/g, '').trim();
+                            break;
+                        }
+                    }
+
+                    // Check for correct answers in the quiz-list
+                    const quizListDiv = div.querySelector('ol[class*="quiz-list"]');
+                    if (quizListDiv) {
+                        const correctItems = quizListDiv.querySelectorAll('li.correctAnswer');
+                        correctAnswers = Array.from(correctItems).map(li => li.textContent.trim());
+
+                        // If no correct answers found, set to "Không chọn gì (TN) / Không tìm thấy đáp án (TL)"
+                        if (correctAnswers.length === 0) {
+                            dapAn = 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)';
+                        } else {
+                            dapAn = correctAnswers.join(', ');
+                        }
+                    }
+                    break;
+                }
+            }
+
+            return {
+                question: question.replace(/<[^>]+>/g, '').trim(),
+                correctAnswers,
+                dapAn: dapAn || 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)'
             };
         }
 
@@ -137,46 +212,113 @@
                 const results = [];
                 for (let i = 1; i < sections.length; i++) {
                     const sectionHtml = '<hr id=' + sections[i];
-                    const sectionDiv = document.createElement('div');
-                    sectionDiv.innerHTML = sectionHtml;
+                    const sectionLines = sectionHtml.split('\n');
 
-                    let subQuestion = '';
+                    let hrIndex = -1;
+                    let abovePTags = [];
+                    let belowPTags = [];
+                    let quizListFound = false;
+                    let inputDataAcceptFound = false;
+
+                    // Find the HR line and collect surrounding p tags
+                    for (let j = 0; j < sectionLines.length; j++) {
+                        const line = sectionLines[j].trim();
+
+                        if (line.includes('<hr id=')) {
+                            hrIndex = j;
+                            continue;
+                        }
+
+                        // Collect p tags above HR
+                        if (hrIndex === -1 && line.startsWith('<p')) {
+                            abovePTags.push(line);
+                        }
+
+                        // Collect p tags below HR
+                        if (hrIndex !== -1 && line.startsWith('<p')) {
+                            belowPTags.push(line);
+                        }
+                    }
+
+                    // Check for quiz-list below the p tags
+                    for (let j = hrIndex + 1; j < sectionLines.length; j++) {
+                        const line = sectionLines[j].trim();
+                        if (line.includes('class="quiz-list') || line.includes("class='quiz-list")) {
+                            quizListFound = true;
+                            break;
+                        }
+                        if (!line.startsWith('<p') && line !== '') {
+                            break; // Stop if we hit non-p, non-empty line
+                        }
+                    }
+
+                    // Check for input data-accept in p tags
+                    const allPTags = [...abovePTags, ...belowPTags];
+                    for (const pTag of allPTags) {
+                        if (pTag.includes('<input data-accept="')) {
+                            inputDataAcceptFound = true;
+                            break;
+                        }
+                    }
+
+                    // Build the question from p tags
+                    const subQuestion = allPTags.map(p => p.replace(/<[^>]+>/g, '').trim()).join(' ').trim();
+
                     let subAnswers = [];
-                    let subDapAn = null;
+                    let subDapAn = 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)'; // Default value
 
-                    // Extract question from <p> tags
-                    const pTags = sectionDiv.querySelectorAll('p[dir="ltr"][style*="text-align: justify;"]');
-                    if (pTags.length > 0) {
-                        subQuestion = Array.from(pTags).map(p => p.textContent.trim()).join(' ');
+                    // Case 1: Quiz list found below p tags
+                    if (quizListFound) {
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = sectionLines.join('\n');
+                        const correctLis = tempDiv.querySelectorAll('li.correctAnswer');
+                        subAnswers = Array.from(correctLis).map(li => li.textContent.trim());
+                        subDapAn = subAnswers.length ? subAnswers.join(', ') : 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)';
                     }
-
-                    // Extract answer from input data-accept
-                    const input = sectionDiv.querySelector('input[data-accept]');
-                    if (input) {
-                        subAnswers = [input.getAttribute('data-accept').trim()];
-                        subDapAn = input.getAttribute('data-accept').trim();
+                    // Case 2: Input data-accept found in p tags
+                    else if (inputDataAcceptFound) {
+                        const inputs = [];
+                        for (const pTag of allPTags) {
+                            const tempDiv = document.createElement('div');
+                            tempDiv.innerHTML = pTag;
+                            const inputElements = tempDiv.querySelectorAll('input[data-accept]');
+                            inputElements.forEach(input => {
+                                inputs.push(input.getAttribute('data-accept').trim());
+                            });
+                        }
+                        subAnswers = inputs;
+                        subDapAn = inputs.join(', ');
                     }
-
-                    // Extract answer from explanation if not found in input
-                    if (!subDapAn) {
-                        const expDiv = sectionDiv.querySelector('.exp');
-                        if (expDiv) {
-                            const expText = expDiv.textContent;
-                            const match = expText.match(/Đáp án\s*:\s*(.*)/i);
-                            if (match) {
-                                subDapAn = match[1].trim();
-                                if (subAnswers.length === 0) {
-                                    subAnswers = [subDapAn];
-                                }
+                    // Case 3: Check for p dir="ltr" with input data-accept
+                    else {
+                        const pDirLtrTags = [];
+                        // Collect p dir="ltr" tags above and below HR
+                        for (let j = 0; j < sectionLines.length; j++) {
+                            const line = sectionLines[j].trim();
+                            if (line.startsWith('<p dir="ltr"')) {
+                                pDirLtrTags.push(line);
                             }
                         }
+
+                        // Check for input data-accept in these p dir="ltr" tags
+                        const inputs = [];
+                        for (const pTag of pDirLtrTags) {
+                            const tempDiv = document.createElement('div');
+                            tempDiv.innerHTML = pTag;
+                            const inputElements = tempDiv.querySelectorAll('input[data-accept]');
+                            inputElements.forEach(input => {
+                                inputs.push(input.getAttribute('data-accept').trim());
+                            });
+                        }
+                        subAnswers = inputs;
+                        subDapAn = inputs.join(', ');
                     }
 
                     if (subQuestion || subAnswers.length || subDapAn) {
                         results.push({
-                            question: subQuestion.replace(/<[^>]+>/g, '').trim(),
+                            question: subQuestion,
                             correctAnswers: subAnswers,
-                            dapAn: subDapAn || ''
+                            dapAn: subDapAn
                         });
                     }
                 }
@@ -189,7 +331,7 @@
                     const allResults = [{
                         question: question.replace(/<[^>]+>/g, '').trim(),
                         correctAnswers: [],
-                        dapAn: ''
+                        dapAn: 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)'
                     }].concat(results);
                     return allResults;
                 }
@@ -212,25 +354,6 @@
                         }
                     }
                     break;
-                }
-            }
-
-            // Handle the case where question is formatted with <ol class='quiz-list'>
-            if (question === '[No question]') {
-                for (let i = 0; i < lines.length; i++) {
-                    const line = lines[i];
-                    if (line.includes("<ol class='quiz-list'") || line.includes('<ol class="quiz-list"')) {
-                        const olIndex = line.indexOf("<ol class='quiz-list'");
-                        if (olIndex === -1) {
-                            const olIndex2 = line.indexOf('<ol class="quiz-list"');
-                            if (olIndex2 !== -1) {
-                                question = line.substring(0, olIndex2).trim();
-                            }
-                        } else {
-                            question = line.substring(0, olIndex).trim();
-                        }
-                        break;
-                    }
                 }
             }
 
@@ -289,10 +412,19 @@
         // Clean up question text - remove HTML tags but preserve line breaks for formatting
         question = question.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
+        // If we have multiple data-accept values but they weren't captured earlier
+        if (correctAnswers.length === 0) {
+            const allInputs = div.querySelectorAll('input[data-accept]');
+            if (allInputs.length > 0) {
+                correctAnswers = Array.from(allInputs).map(input => input.getAttribute('data-accept').trim());
+                dapAn = correctAnswers.join(', ');
+            }
+        }
+
         return {
             question: question,
             correctAnswers,
-            dapAn: dapAn || (correctAnswers.length ? correctAnswers.join(', ') : '')
+            dapAn: dapAn || (correctAnswers.length ? correctAnswers.join(', ') : 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)')
         };
     }
 
