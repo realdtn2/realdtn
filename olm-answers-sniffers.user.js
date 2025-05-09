@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OLM Answers Sniffers
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  Sniff answers from the network requests
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -17,6 +17,7 @@
     let allRawDecoded = [];
     let allDapAnOnly = [];
     let questionCounter = 1;
+    let firstGetQuestionRequest = null; // Store the first get-question-of-ids request
 
     function decodeBase64ToHTML(base64) {
         try {
@@ -588,6 +589,29 @@
         const dapAnTab = document.createElement('button');
         dapAnTab.textContent = 'Đáp án';
 
+        // Add refresh button next to Đáp án button
+        const refreshBtn = document.createElement('button');
+        refreshBtn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${iconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+        `;
+        refreshBtn.title = "Refresh questions";
+        Object.assign(refreshBtn.style, {
+            padding: '6px 8px',
+            marginLeft: '6px',
+            border: 'none',
+            backgroundColor: '#4CAF50',
+            color: 'white',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+        });
+
         [answerTab, dapAnTab].forEach(btn => {
             Object.assign(btn.style, {
                 padding: '6px 12px', marginRight: '6px',
@@ -608,8 +632,66 @@
             if (window.MathJax) MathJax.typesetPromise([contentArea]);
         };
 
+        refreshBtn.onclick = () => {
+            if (!firstGetQuestionRequest) {
+                alert('No initial get-question-of-ids request found');
+                return;
+            }
+
+            // Clear previous data
+            allParsedCorrect = [];
+            allRawDecoded = [];
+            allDapAnOnly = [];
+            questionCounter = 1;
+            contentArea.innerHTML = 'Refreshing...';
+
+            // Create a new XHR request with the stored data
+            const xhr = new XMLHttpRequest();
+            xhr.open(firstGetQuestionRequest.method, firstGetQuestionRequest.url, true);
+
+            // Set headers if they exist
+            if (firstGetQuestionRequest.headers) {
+                for (const header in firstGetQuestionRequest.headers) {
+                    xhr.setRequestHeader(header, firstGetQuestionRequest.headers[header]);
+                }
+            }
+
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const response = JSON.parse(xhr.responseText);
+                        processResponse(response);
+                        setTimeout(() => {
+                            // Update the UI with the new data
+                            if (contentArea.innerHTML.includes('Refreshing')) {
+                                if (allParsedCorrect.length > 0) {
+                                    contentArea.innerHTML = allParsedCorrect.join('<br>').replace(/\n/g, '<br>');
+                                } else if (allDapAnOnly.length > 0) {
+                                    contentArea.innerHTML = allDapAnOnly.map((a, i) => `Đáp án ${i + 1}: ${a}`).join('<br>');
+                                }
+                                if (window.MathJax) MathJax.typesetPromise([contentArea]);
+                            }
+                        }, 500);
+                    } catch (e) {
+                        console.error("Error parsing response", e);
+                        contentArea.innerHTML = 'Error refreshing data';
+                    }
+                } else {
+                    contentArea.innerHTML = 'Error refreshing data';
+                }
+            };
+
+            xhr.onerror = function() {
+                contentArea.innerHTML = 'Error refreshing data';
+            };
+
+            // Send the request with the original data if it exists
+            xhr.send(firstGetQuestionRequest.data || null);
+        };
+
         tabContainer.appendChild(answerTab);
         tabContainer.appendChild(dapAnTab);
+        tabContainer.appendChild(refreshBtn);
         container.appendChild(tabContainer);
         container.appendChild(contentArea);
 
@@ -646,14 +728,35 @@
     const open = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function (...args) {
         this._url = args[1];
+        this._method = args[0];
         return open.apply(this, args);
+    };
+
+    const setRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+        if (!this._headers) {
+            this._headers = {};
+        }
+        this._headers[header] = value;
+        return setRequestHeader.apply(this, arguments);
     };
 
     const send = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function (...args) {
+        const requestData = args[0];
         this.addEventListener("load", function () {
             if (this._url && this._url.includes("get-question-of-ids")) {
                 try {
+                    // Store the first get-question-of-ids request details
+                    if (!firstGetQuestionRequest) {
+                        firstGetQuestionRequest = {
+                            url: this._url,
+                            method: this._method,
+                            headers: this._headers,
+                            data: requestData
+                        };
+                    }
+
                     const response = JSON.parse(this.responseText);
                     processResponse(response);
                     setTimeout(() => {
