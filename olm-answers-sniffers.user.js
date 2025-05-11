@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OLM Answers Sniffers
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  Sniff answers from the network requests
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -17,7 +17,11 @@
     let allRawDecoded = [];
     let allDapAnOnly = [];
     let questionCounter = 1;
-    let firstGetQuestionRequest = null; // Store the first get-question-of-ids request
+    let firstGetQuestionRequest = null;
+    let container = null;
+    let contentArea = null;
+    let toggleBtn = null;
+    let downloadBtn = null;
 
     function decodeBase64ToHTML(base64) {
         try {
@@ -517,12 +521,18 @@
     }
 
     function createGUI() {
+        if (container) {
+            // If UI already exists, just update the content
+            updateContent();
+            return;
+        }
+
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         const iconColor = prefersDark ? '#fff' : '#000';
         const backgroundColor = 'transparent';
         const opacity = '0.8';
 
-        const toggleBtn = document.createElement('button');
+        toggleBtn = document.createElement('button');
         toggleBtn.innerHTML = `
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${iconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="3" y1="7" x2="21" y2="7" />
@@ -538,7 +548,7 @@
             padding: '0'
         });
 
-        const downloadBtn = document.createElement('button');
+        downloadBtn = document.createElement('button');
         downloadBtn.innerHTML = `
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${iconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -566,7 +576,7 @@
             URL.revokeObjectURL(url);
         };
 
-        const container = document.createElement('div');
+        container = document.createElement('div');
         Object.assign(container.style, {
             position: 'fixed', top: '60px', right: '10px', width: '250px', height: '40%',
             overflowY: 'auto', backgroundColor: 'white', zIndex: '9999', padding: '10px',
@@ -574,7 +584,7 @@
             fontSize: '14px', lineHeight: '1.5'
         });
 
-        const contentArea = document.createElement('div');
+        contentArea = document.createElement('div');
         contentArea.id = 'content-area';
         Object.assign(contentArea.style, {
             whiteSpace: 'normal',
@@ -589,7 +599,6 @@
         const dapAnTab = document.createElement('button');
         dapAnTab.textContent = 'Đáp án';
 
-        // Add refresh button next to Đáp án button
         const refreshBtn = document.createElement('button');
         refreshBtn.innerHTML = `
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${iconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -621,15 +630,11 @@
         });
 
         answerTab.onclick = () => {
-            contentArea.innerHTML = allParsedCorrect.join('<br>').replace(/\n/g, '<br>');
-            if (window.MathJax) MathJax.typesetPromise([contentArea]);
+            updateContent('answers');
         };
 
         dapAnTab.onclick = () => {
-            contentArea.innerHTML = allDapAnOnly.length
-                ? allDapAnOnly.map((a, i) => `Đáp án ${i + 1}: ${a}`).join('<br>')
-            : '[No Đáp án found]';
-            if (window.MathJax) MathJax.typesetPromise([contentArea]);
+            updateContent('dapAn');
         };
 
         refreshBtn.onclick = () => {
@@ -661,17 +666,7 @@
                     try {
                         const response = JSON.parse(xhr.responseText);
                         processResponse(response);
-                        setTimeout(() => {
-                            // Update the UI with the new data
-                            if (contentArea.innerHTML.includes('Refreshing')) {
-                                if (allParsedCorrect.length > 0) {
-                                    contentArea.innerHTML = allParsedCorrect.join('<br>').replace(/\n/g, '<br>');
-                                } else if (allDapAnOnly.length > 0) {
-                                    contentArea.innerHTML = allDapAnOnly.map((a, i) => `Đáp án ${i + 1}: ${a}`).join('<br>');
-                                }
-                                if (window.MathJax) MathJax.typesetPromise([contentArea]);
-                            }
-                        }, 500);
+                        updateContent();
                     } catch (e) {
                         console.error("Error parsing response", e);
                         contentArea.innerHTML = 'Error refreshing data';
@@ -697,7 +692,9 @@
 
         toggleBtn.onclick = () => {
             container.style.display = container.style.display === 'none' ? 'block' : 'none';
-            if (window.MathJax) MathJax.typesetPromise([contentArea]);
+            if (window.MathJax && container.style.display === 'block') {
+                MathJax.typesetPromise([contentArea]);
+            }
         };
 
         document.body.appendChild(toggleBtn);
@@ -719,11 +716,34 @@
         mj.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js';
         mj.async = true;
         mj.onload = () => {
-            // Force MathJax to render all content after it's loaded
-            MathJax.typesetPromise([contentArea]);
+            if (container.style.display === 'block') {
+                MathJax.typesetPromise([contentArea]);
+            }
         };
         document.head.appendChild(mj);
+
+        // Initial content update
+        updateContent();
     }
+
+    function updateContent(type = 'answers') {
+        if (!contentArea) return;
+
+        if (type === 'answers') {
+            contentArea.innerHTML = allParsedCorrect.join('<br>').replace(/\n/g, '<br>');
+        } else {
+            contentArea.innerHTML = allDapAnOnly.length
+                ? allDapAnOnly.map((a, i) => `Đáp án ${i + 1}: ${a}`).join('<br>')
+                : '[No Đáp án found]';
+        }
+
+        if (window.MathJax) {
+            MathJax.typesetPromise([contentArea]);
+        }
+    }
+
+    // [Rest of your existing code...]
+    // Keep all the remaining functions exactly as they were
 
     const open = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function (...args) {
