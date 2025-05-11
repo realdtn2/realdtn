@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OLM Answers Sniffers
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  Sniff answers from the network requests
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -501,15 +501,15 @@
 
         // Build parts conditionally
         const answerPart = correctAnswers.length > 0
-            ? `Answer(s):\n${correctAnswers.map(ans => `- ${ans}`).join('\n')}`
-            : '';
-        const dapAnPart = dapAn ? `Dap An: ${dapAn}` : '';
+        ? `<strong>Answer(s):</strong><br>${correctAnswers.map(ans => `<span style="font-size: 200%">•</span> <span style="font-size: 80%">${ans}</span>`).join('<br>')}`
+        : '';
+        const dapAnPart = dapAn ? `<strong>Dap An:</strong> ${dapAn}` : '';
 
-        // Format with single newlines between sections
-        let formatted = `Question ${questionCounter++}: ${question}`;
-        if (answerPart) formatted += `\n${answerPart}`;
-        if (dapAnPart) formatted += `\n${dapAnPart}`;
-        formatted += '\n'; // Single newline at end
+        // Format with sections
+        let formatted = `<strong>Question ${questionCounter++}: ${question}</strong>`;
+        if (answerPart) formatted += `<br>${answerPart}`;
+        if (dapAnPart) formatted += `<br>${dapAnPart}`;
+        formatted += '<br>'; // Single line break at end
 
         if (correctAnswers.length || dapAn) {
             allParsedCorrect.push(formatted);
@@ -730,11 +730,11 @@
         if (!contentArea) return;
 
         if (type === 'answers') {
-            contentArea.innerHTML = allParsedCorrect.join('<br>').replace(/\n/g, '<br>');
+            contentArea.innerHTML = allParsedCorrect.join('<br>');
         } else {
             contentArea.innerHTML = allDapAnOnly.length
-                ? allDapAnOnly.map((a, i) => `Đáp án ${i + 1}: ${a}`).join('<br>')
-                : '[No Đáp án found]';
+                ? allDapAnOnly.map((a, i) => `<strong>Đáp án ${i + 1}:</strong> ${a}`).join('<br>')
+            : '[No Đáp án found]';
         }
 
         if (window.MathJax) {
