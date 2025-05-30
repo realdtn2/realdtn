@@ -1,0 +1,9 @@
+getgenv().Camlock_Settings = {
+        Prediction = 0.144,
+        AimPart = "HumanoidRootPart",
+        Key = "Z",
+        AutoPrediction = true,
+        Notification = true,
+        Button = true,
+        AntiGroundShots = false,
+        UnderGroundResolver = false,
