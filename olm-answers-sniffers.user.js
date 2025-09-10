@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OLM Answers Sniffers
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      2.0
 // @description  Sniff answers from the network requests
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -10,783 +10,1885 @@
 // @downloadURL  https://raw.githubusercontent.com/realdtn2/realdtn/main/olm-answers-sniffers.user.js
 // ==/UserScript==
 
-(function () {
+(function() {
     'use strict';
 
-    let allParsedCorrect = [];
-    let allRawDecoded = [];
-    let allDapAnOnly = [];
-    let questionCounter = 1;
-    let firstGetQuestionRequest = null;
-    let container = null;
-    let contentArea = null;
-    let toggleBtn = null;
-    let downloadBtn = null;
+    // State management
+    const state = {
+        questions: [],
+        rawData: [],
+        isVisible: false,
+        currentTab: 'formatted',
+        firstRequest: null
+    };
 
-    function decodeBase64ToHTML(base64) {
-        try {
-            return decodeURIComponent(escape(atob(base64)));
-        } catch (e) {
-            console.error("Decoding failed:", e);
-            return null;
-        }
-    }
+    // Utility functions
+    const utils = {
+        decodeBase64ToHTML(base64) {
+            try {
+                return decodeURIComponent(escape(atob(base64)));
+            } catch (e) {
+                console.error("Decoding failed:", e);
+                return null;
+            }
+        },
 
-    function convertDollarLatexToMathJax(html) {
-        return html.replace(/\$(.+?)\$/g, (_, expr) => `\\(${expr}\\)`);
-    }
+        convertLatexToMathJax(html) {
+            if (!html) return html;
 
-    function extractDapAnFromHTML(html) {
-        const div = document.createElement('div');
-        div.innerHTML = html;
-        const answers = [];
-
-        const lines = div.innerHTML.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            if (line.includes('Đáp án:')) {
-                const match = line.match(/Đáp án\s*:\s*(.*)/i);
-                if (match) {
-                    const answerLine = match[1].trim();
-                    const inputMatch = line.match(/<input[^>]*data-accept="([^"]+)"[^>]*>/);
-                    if (inputMatch) {
-                        answers.push(inputMatch[1].trim());
-                    } else {
-                        answers.push(answerLine);
+            // First, ensure MathJax is loaded before processing
+            if (!mathRenderer.isLoaded) {
+                // Queue for processing after MathJax loads
+                setTimeout(() => {
+                    if (mathRenderer.isLoaded) {
+                        this.convertLatexToMathJax(html);
                     }
-                }
-            }
-            // Also capture input data-accept in trigger-curriculum-cate spans
-            else if (line.includes('<span class="trigger-curriculum-cate">')) {
-                const inputMatch = line.match(/<input[^>]*data-accept="([^"]+)"[^>]*>/);
-                if (inputMatch) {
-                    answers.push(inputMatch[1].trim());
-                }
-            }
-        }
-        return answers;
-    }
-
-    function extractQuestionAndAnswer(html) {
-        const div = document.createElement('div');
-        div.innerHTML = html;
-
-        let question = '[No question]';
-        let correctAnswers = [];
-        let dapAn = null;
-
-        const lines = div.innerHTML.split('\n');
-
-        // Special case for multiple trigger-curriculum-cate spans with input data-accept
-        const triggerCurriculumCates = div.querySelectorAll('span.trigger-curriculum-cate');
-        if (triggerCurriculumCates.length > 0) {
-            // Collect all questions and answers from these spans
-            const results = [];
-
-            // First find all the input data-accept values
-            const allInputs = div.querySelectorAll('span.trigger-curriculum-cate input[data-accept]');
-            if (allInputs.length > 0) {
-                correctAnswers = Array.from(allInputs).map(input => input.getAttribute('data-accept').trim());
-                dapAn = correctAnswers.join(', ');
+                }, 100);
+                return html;
             }
 
-            // Now find all the questions (text before each trigger-curriculum-cate span)
-            let currentQuestion = '';
-            const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT, null, false);
-            let node;
+            return mathRenderer.processText(html);
+        },
 
-            while (node = walker.nextNode()) {
-                const text = node.nodeValue.trim();
-                if (text) {
-                    currentQuestion += ' ' + text;
-                }
-
-                if (node.parentNode && node.parentNode.classList &&
-                    node.parentNode.classList.contains('trigger-curriculum-cate')) {
-                    if (currentQuestion.trim()) {
-                        results.push({
-                            question: currentQuestion.trim(),
-                            correctAnswers: [],
-                            dapAn: node.parentNode.querySelector('input[data-accept]')?.getAttribute('data-accept') || ''
-                        });
-                        currentQuestion = '';
-                    }
-                }
-            }
-
-            // If we found multiple questions with answers, return them all
-            if (results.length > 1) {
-                // Filter out empty questions and combine answers
-                const filteredResults = results.filter(r => r.question && r.question !== '[No question]');
-                if (filteredResults.length > 0) {
-                    // Combine all answers from all questions
-                    const allAnswers = filteredResults.map(r => r.dapAn).filter(a => a);
-                    return filteredResults.map((r, i) => ({
-                        question: r.question,
-                        correctAnswers: allAnswers[i] ? [allAnswers[i]] : [],
-                        dapAn: allAnswers[i] || 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)'
-                    }));
-                }
-            }
-            // Otherwise fall through to normal processing
-        }
-
-        // Special case for true-false questions
-        if (html.includes("<ol class='true-false") || html.includes('<ol class="true-false')) {
-            for (let i = 0; i < lines.length; i++) {
-                if (lines[i].includes("<ol class='true-false") || lines[i].includes('<ol class="true-false')) {
-                    // Question is everything before the <ol class='true-false'
-                    const olIndex = lines[i].indexOf("<ol class='true-false");
-                    if (olIndex === -1) {
-                        const olIndex2 = lines[i].indexOf('<ol class="true-false');
-                        if (olIndex2 !== -1) {
-                            question = lines[i].substring(0, olIndex2).trim();
-                        }
-                    } else {
-                        question = lines[i].substring(0, olIndex).trim();
-                    }
-
-                    // Extract all correct answers from the true-false list
-                    const trueFalseDiv = div.querySelector('ol[class*="true-false"]');
-                    if (trueFalseDiv) {
-                        const correctItems = trueFalseDiv.querySelectorAll('li.correctAnswer');
-                        correctAnswers = Array.from(correctItems).map(li => li.innerHTML.trim());
-                    }
-                    break;
-                }
-            }
-            return {
-                question: question.replace(/<[^>]+>/g, '').trim(),
-                correctAnswers,
-                dapAn: correctAnswers.length ? correctAnswers.join(', ') : 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)'
+        debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
             };
-        }
+        },
 
-        // Handle quiz-list cases (including those without correct answers)
-        if (html.includes("<ol class='quiz-list") || html.includes('<ol class="quiz-list"')) {
-            // Find the question text before the quiz-list
-            for (let i = 0; i < lines.length; i++) {
-                if (lines[i].includes("<ol class='quiz-list") || lines[i].includes('<ol class="quiz-list"')) {
-                    // Backtrack to find the question line before <ol>
-                    for (let j = i - 1; j >= 0; j--) {
-                        if (lines[j].includes('<p') || lines[j].trim() !== '') {
-                            question = lines[j].replace(/<[^>]+>/g, '').trim();
+        sanitizeHTML(html) {
+            const div = document.createElement('div');
+            div.innerHTML = html;
+            return div.innerHTML;
+        }
+    };
+
+    // MathJax integration for mathematical and chemical rendering
+    const mathRenderer = {
+        isLoaded: false,
+        isLoading: false,
+        queue: [],
+
+        init() {
+            this.loadMathJax();
+        },
+
+        loadMathJax() {
+            if (this.isLoaded || this.isLoading) return;
+
+            this.isLoading = true;
+            console.log('�� Loading MathJax...');
+
+            // Configure MathJax before loading
+            window.MathJax = {
+                tex: {
+                    inlineMath: [['$', '$'], ['\\(', '\\)']],
+                    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                    processEscapes: true,
+                    processEnvironments: true,
+                    packages: {'[+]': ['base', 'ams', 'noerrors', 'noundefined', 'mhchem']}
+                },
+                chtml: {
+                    scale: 0.9,
+                    minScale: 0.5,
+                    matchFontHeight: false,
+                    fontURL: 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/output/chtml/fonts/woff-v2'
+                },
+                loader: {
+                    load: ['[tex]/mhchem']
+                },
+                startup: {
+                    ready: () => {
+                        console.log('✅ MathJax loaded successfully');
+                        this.isLoaded = true;
+                        this.isLoading = false;
+                        MathJax.startup.defaultReady();
+
+                        // Process queued content
+                        this.processQueue();
+                    }
+                }
+            };
+
+            // Load MathJax script
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js';
+            script.async = true;
+            script.onerror = () => {
+                console.error('❌ Failed to load MathJax');
+                this.isLoading = false;
+            };
+
+            document.head.appendChild(script);
+        },
+
+        processQueue() {
+            while (this.queue.length > 0) {
+                const { element, callback } = this.queue.shift();
+                this.renderMath(element);
+                if (callback) callback();
+            }
+        },
+
+        processText(text) {
+            if (!text) return text;
+
+            // If it already contains LaTeX delimiters, only do light normalization
+            if (text.includes('$') || text.includes('\\(') || text.includes('\\[')) {
+                return text
+                    .replace(/_\{\{([^}]+)\}\}/g, '_{$1}')
+                    .replace(/\^\{\{([^}]+)\}\}/g, '^{$1}')
+                    .replace(/\^\{?\s*o\s*\}?/g, '^{\\circ}');
+            }
+
+            let s = text;
+
+            // 1) Normalize HTML → LaTeX-ish (in case raw HTML leaked through)
+            s = s.replace(/<sub[^>]*>\s*([^<]+?)\s*<\/sub>/gi, '_{$1}')
+                 .replace(/<sup[^>]*>\s*([^<]+?)\s*<\/sup>/gi, '^{$1}')
+                 .replace(/<span[^>]*class="[^"]*OlmEditorTheme[^"]*"[^>]*>(.*?)<\/span>/gi, '$1')
+                 .replace(/<span[^>]*>(.*?)<\/span>/gi, '$1');
+
+            // 2) Collapse editor double braces and normalize degree
+            s = s.replace(/_\{\{([^}]+)\}\}/g, '_{$1}')
+                 .replace(/\^\{\{([^}]+)\}\}/g, '^{$1}')
+                 .replace(/\^\{?\s*o\s*\}?/g, '^{\\circ}');
+
+            // 3) Normalize whitespace
+            s = s.replace(/\s+/g, ' ').trim();
+
+            // 4) Chemistry-friendly normalization:
+            //    Convert tokens like C_{2}H_{5} -> C2H5 inside \ce later; keep digits for ce
+            const ceReady = s.replace(/([A-Z][a-z]?)_\{(\d+)\}/g, '$1$2');
+
+            // 5) Wrap obvious chemical fragments into \ce{...}
+            //    Supports sequences with -, =, parentheses
+            const wrapCE = (str) => str.replace(
+                /(^|[^$\\])((?:[A-Z][a-z]?\d*(?:\([A-Z][a-z]?\d*\)\d*)*(?:\s*[-=]\s*)?)+)(?=$|[^A-Za-z0-9()=])/g,
+                (match, pre, frag) => {
+                    // Ignore very short fragments
+                    if (frag.replace(/\s+/g, '').length < 2) return match;
+                    return pre + '$\\ce{' + frag.replace(/\s+/g, '') + '}$';
+                }
+            );
+
+            s = wrapCE(ceReady);
+
+            // 6) If there are LaTeX markers (_{...}, ^{...}, \ce{...}) but no math delimiters, wrap in inline math
+            if (!/\$/.test(s) && /(_\{|\^\{|\\ce\{|\\frac)/.test(s)) {
+                s = '$' + s + '$';
+            }
+
+            return s;
+        },
+
+        renderMath(element) {
+            if (!this.isLoaded) {
+                // Queue for later rendering
+                this.queue.push({ element, callback: null });
+                return;
+            }
+
+            try {
+                // Process text nodes more carefully
+                const textNodes = this.getTextNodes(element);
+
+                textNodes.forEach(node => {
+                    const originalText = node.textContent;
+
+                    // Skip if already processed or contains LaTeX
+                    if (originalText.includes('$') ||
+                        originalText.includes('\\(') ||
+                        originalText.includes('\\[') ||
+                        node.parentNode.classList.contains('MathJax')) {
+                        return;
+                    }
+
+                    const processedText = this.processText(originalText);
+
+                    if (processedText !== originalText) {
+                        // Create a temporary container to parse the HTML
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = processedText;
+
+                        // Replace the text node with the processed content
+                        const parent = node.parentNode;
+                        while (tempDiv.firstChild) {
+                            parent.insertBefore(tempDiv.firstChild, node);
+                        }
+                        parent.removeChild(node);
+                    }
+                });
+
+                // Typeset with MathJax
+                if (MathJax && MathJax.typesetPromise) {
+                    MathJax.typesetPromise([element]).catch((err) => {
+                        console.warn('MathJax rendering error:', err);
+                    });
+                }
+
+            } catch (error) {
+                console.error('Math rendering error:', error);
+            }
+        },
+
+        getTextNodes(element) {
+            const textNodes = [];
+            const walker = document.createTreeWalker(
+                element,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode: function(node) {
+                        // Skip nodes that are already processed or in script/style tags
+                        if (node.parentNode.tagName === 'SCRIPT' ||
+                            node.parentNode.tagName === 'STYLE' ||
+                            node.parentNode.classList.contains('MathJax') ||
+                            node.parentNode.classList.contains('olm-sniffer-answer') ||
+                            node.parentNode.classList.contains('math-q')) {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                }
+            );
+
+            let node;
+            while (node = walker.nextNode()) {
+                textNodes.push(node);
+            }
+
+            return textNodes;
+        },
+
+        // Enhanced detection methods
+        detectChemicalFormula(text) {
+            const chemicalPatterns = [
+                /\b[A-Z][a-z]?(\d+)?(\([A-Z][a-z]?\d*\)\d*)*\b/g,
+                /\b\d*[A-Z][a-z]?\d*([A-Z][a-z]?\d*)*\b/g,
+                /\[[A-Z][a-z]?(\([A-Z][a-z]?\d*\)\d*)*\]\d*[-+]\d*/g,
+            ];
+
+            return chemicalPatterns.some(pattern => pattern.test(text));
+        },
+
+        detectMathFormula(text) {
+            const mathPatterns = [
+                /\$.*?\$/g,
+                /\\\(.*?\\\)/g,
+                /\\\[.*?\\\]/g,
+                /\\[a-zA-Z]+/g,
+                /\^[\w{}]+/g,
+                /_[\w{}]+/g,
+                /[±×÷≤≥≠∞√≈∝]/g,
+                /\\frac\{.*?\}\{.*?\}/g,
+            ];
+
+            return mathPatterns.some(pattern => pattern.test(text));
+        }
+    };
+
+    // Auto-scroll functionality
+    const autoScroller = {
+        init() {
+            this.setupQuestionObserver();
+            this.setupPanelScrollSync();
+        },
+
+        setupQuestionObserver() {
+            // Create a MutationObserver to watch for changes in question buttons
+            const observer = new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    if (mutation.type === 'attributes' &&
+                        mutation.attributeName === 'class') {
+
+                        const target = mutation.target;
+
+                        // Check for .item-q.active (original type)
+                        if (target.classList.contains('item-q') &&
+                            target.classList.contains('active')) {
+                            const questionId = parseInt(target.getAttribute('data-id'));
+                            this.scrollToAnswer(questionId);
+                        }
+
+                        // Check for .q-static.q-select (new type)
+                        if (target.classList.contains('q-static') &&
+                            target.classList.contains('q-select')) {
+                            const questionId = parseInt(target.getAttribute('data-stt'));
+                            this.scrollToAnswer(questionId);
+                        }
+                    }
+                });
+            });
+
+            // Start observing
+            this.startObserving(observer);
+
+            // Also set up a periodic check in case MutationObserver misses something
+            this.setupPeriodicCheck();
+        },
+
+        startObserving(observer) {
+            // Function to start observing existing buttons
+            const observeExistingButtons = () => {
+                // Observe .item-q buttons (original type)
+                const questionButtons = document.querySelectorAll('.item-q');
+                questionButtons.forEach(button => {
+                    observer.observe(button, {
+                        attributes: true,
+                        attributeFilter: ['class']
+                    });
+                });
+
+                // Observe .q-static buttons (new type)
+                const staticButtons = document.querySelectorAll('.q-static');
+                staticButtons.forEach(button => {
+                    observer.observe(button, {
+                        attributes: true,
+                        attributeFilter: ['class']
+                    });
+                });
+            };
+
+            // Observe existing buttons
+            observeExistingButtons();
+
+            // Also observe the document for new buttons being added
+            const documentObserver = new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType === 1) { // Element node
+                            // Check if the added node contains question buttons
+                            const newItemButtons = node.querySelectorAll ?
+                                node.querySelectorAll('.item-q') : [];
+                            const newStaticButtons = node.querySelectorAll ?
+                                node.querySelectorAll('.q-static') : [];
+
+                            // Observe new .item-q buttons
+                            newItemButtons.forEach(button => {
+                                observer.observe(button, {
+                                    attributes: true,
+                                    attributeFilter: ['class']
+                                });
+                            });
+
+                            // Observe new .q-static buttons
+                            newStaticButtons.forEach(button => {
+                                observer.observe(button, {
+                                    attributes: true,
+                                    attributeFilter: ['class']
+                                });
+                            });
+
+                            // Also check if the node itself is a question button
+                            if (node.classList &&
+                                (node.classList.contains('item-q') || node.classList.contains('q-static'))) {
+                                observer.observe(node, {
+                                    attributes: true,
+                                    attributeFilter: ['class']
+                                });
+                            }
+                        }
+                    });
+                });
+            });
+
+            documentObserver.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+        },
+
+        setupPeriodicCheck() {
+            let lastActiveQuestion = -1;
+
+            setInterval(() => {
+                // Check for .item-q.active (original type)
+                const activeButton = document.querySelector('.item-q.active');
+                if (activeButton) {
+                    const currentActiveQuestion = parseInt(activeButton.getAttribute('data-id'));
+
+                    // Only scroll if the active question changed
+                    if (currentActiveQuestion !== lastActiveQuestion) {
+                        lastActiveQuestion = currentActiveQuestion;
+                        this.scrollToAnswer(currentActiveQuestion);
+                    }
+                }
+
+                // Check for .q-static.q-select (new type)
+                const selectedStatic = document.querySelector('.q-static.q-select');
+                if (selectedStatic) {
+                    const currentActiveQuestion = parseInt(selectedStatic.getAttribute('data-stt'));
+
+                    // Only scroll if the active question changed
+                    if (currentActiveQuestion !== lastActiveQuestion) {
+                        lastActiveQuestion = currentActiveQuestion;
+                        this.scrollToAnswer(currentActiveQuestion);
+                    }
+                }
+            }, 500); // Check every 500ms
+        },
+
+        setupPanelScrollSync() {
+            // Add smooth scrolling behavior to the panel content
+            if (ui.elements.content) {
+                ui.elements.content.style.scrollBehavior = 'smooth';
+            }
+        },
+
+        scrollToAnswer(questionIndex) {
+            // Only scroll if the panel is visible
+            if (!state.isVisible || !ui.elements.content) return;
+
+            // Find the corresponding answer in the panel
+            const questionElements = ui.elements.content.querySelectorAll('.olm-sniffer-question');
+
+            if (questionElements[questionIndex]) {
+                const targetElement = questionElements[questionIndex];
+
+                // Calculate the scroll position
+                const containerRect = ui.elements.content.getBoundingClientRect();
+                const targetRect = targetElement.getBoundingClientRect();
+                const currentScroll = ui.elements.content.scrollTop;
+
+                // Calculate the desired scroll position (center the element)
+                const scrollTo = currentScroll + targetRect.top - containerRect.top -
+                            (containerRect.height / 2) + (targetRect.height / 2);
+
+                // Smooth scroll to the answer
+                ui.elements.content.scrollTo({
+                    top: Math.max(0, scrollTo),
+                    behavior: 'smooth'
+                });
+
+                // Add a temporary highlight effect
+                this.highlightAnswer(targetElement);
+            }
+        },
+
+        highlightAnswer(element) {
+            // Remove existing highlights
+            ui.elements.content.querySelectorAll('.olm-sniffer-question.highlighted')
+                .forEach(el => el.classList.remove('highlighted'));
+
+            // Add highlight class
+            element.classList.add('highlighted');
+
+            // Remove highlight after 2 seconds
+            setTimeout(() => {
+                element.classList.remove('highlighted');
+            }, 2000);
+        }
+    };
+
+    // Enhanced Answer Extraction Engine with HTML and LaTeX Support
+    const answerExtractor = {
+        extractAnswersFromHTML(html) {
+            console.log("🔍 Processing HTML content...");
+
+            const questions = [];
+            const div = document.createElement('div');
+            div.innerHTML = html;
+
+            // Check for HR-separated multi-part questions first
+            if (html.includes('<hr')) {
+                return this.handleMultiPartQuestions(html);
+            }
+
+            // Handle single questions with quiz lists
+            const quizLists = div.querySelectorAll('ol[class*="quiz-list"], ol.true-false, ol.singlechoice, ol.multichoice, ol[data-key]');
+            if (quizLists.length > 0) {
+                quizLists.forEach((list, index) => {
+                    const questionData = this.extractCompleteQuestion(list, div);
+                    const correctAnswers = this.extractCorrectAnswers(list);
+
+                    questions.push({
+                        id: index + 1,
+                        question: questionData.question || `Question ${index + 1}`,
+                        questionContext: questionData.context || '',
+                        answers: correctAnswers,
+                        rawAnswer: correctAnswers.join(', '),
+                        type: this.determineQuestionType(list),
+                        fullHTML: questionData.fullHTML || ''
+                    });
+                });
+            }
+
+            // Handle matching questions
+            const matchingQuestions = this.extractMatchingQuestions(div);
+            questions.push(...matchingQuestions);
+
+            // Handle completion questions (only if no quiz lists found)
+            if (quizLists.length === 0) {
+                const completionQuestions = this.extractCompletionQuestions(div);
+                questions.push(...completionQuestions);
+            }
+
+            // Handle fill-in-blank questions with input data-accept
+            const inputQuestions = this.extractInputQuestions(div);
+            questions.push(...inputQuestions);
+
+            // Handle word form questions
+            const wordFormQuestions = this.extractWordFormQuestions(div);
+            questions.push(...wordFormQuestions);
+
+            console.log(`📝 Extracted ${questions.length} question(s)`);
+            return questions;
+        },
+
+        // Add this after the existing extractAnswersFromHTML function
+        extractMatchingQuestions(div) {
+            const questions = [];
+            const matchingLists = div.querySelectorAll('ul.link-list');
+
+            matchingLists.forEach((list, index) => {
+                const items = list.querySelectorAll('li');
+                const pairs = [];
+
+                items.forEach(item => {
+                    const text = this.cleanTextContent(item.textContent);
+                    if (text.includes('||')) {
+                        const [left, right] = text.split('||').map(s => s.trim());
+                        pairs.push({ left, right });
+                    }
+                });
+
+                if (pairs.length > 0) {
+                    const questionText = this.extractMatchingQuestionText(list, div);
+                    questions.push({
+                        id: questions.length + 1,
+                        question: questionText || `Match the items ${index + 1}`,
+                        questionContext: '',
+                        answers: pairs.map(pair => `${pair.left} → ${pair.right}`),
+                        rawAnswer: pairs.map(pair => `${pair.left} → ${pair.right}`).join(', '),
+                        type: 'matching',
+                        details: pairs,
+                        fullHTML: list.outerHTML
+                    });
+                }
+            });
+
+            return questions;
+        },
+
+        extractMatchingQuestionText(listElement, containerDiv) {
+            // Look for preceding paragraph with matching instructions
+            let current = listElement.previousElementSibling;
+            let questionParts = [];
+
+            while (current && questionParts.length < 3) {
+                if (current.nodeType === 1) {
+                    const text = this.cleanTextContent(current.textContent);
+                    const html = this.preserveFormattingHTML(current.innerHTML);
+
+                    if (text && text.length > 10) {
+                        if (text.includes('Match') || text.includes('match') ||
+                            text.includes('nối') || text.includes('ghép')) {
+                            questionParts.unshift(html || text);
                             break;
                         }
                     }
+                }
+                current = current.previousElementSibling;
+            }
 
-                    // Check for correct answers in the quiz-list
-                    const quizListDiv = div.querySelector('ol[class*="quiz-list"]');
-                    if (quizListDiv) {
-                        const correctItems = quizListDiv.querySelectorAll('li.correctAnswer');
-                        correctAnswers = Array.from(correctItems).map(li => li.textContent.trim());
+            return questionParts.join(' ').trim();
+        },
 
-                        // If no correct answers found, set to "Không chọn gì (TN) / Không tìm thấy đáp án (TL)"
-                        if (correctAnswers.length === 0) {
-                            dapAn = 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)';
-                        } else {
-                            dapAn = correctAnswers.join(', ');
+        extractCompletionQuestions(div) {
+            const questions = [];
+
+            // Look for completion exercises (sentences with blanks or paragraphs)
+            const completionElements = div.querySelectorAll('p:not(:has(ol)):not(:has(ul)):not(:has(input))');
+
+            completionElements.forEach((element, index) => {
+                const text = this.cleanTextContent(element.textContent);
+                const html = this.preserveFormattingHTML(element.innerHTML);
+
+                // Check if this looks like a completion exercise
+                if (this.isCompletionExercise(text)) {
+                    const questionText = this.extractCompletionQuestionText(element, div);
+                    questions.push({
+                        id: questions.length + 1,
+                        question: questionText || `Complete the text ${index + 1}`,
+                        questionContext: '',
+                        answers: [html || text],
+                        rawAnswer: text,
+                        type: 'completion',
+                        fullHTML: element.outerHTML
+                    });
+                }
+            });
+
+            return questions;
+        },
+
+        isCompletionExercise(text) {
+            const completionPatterns = [
+                /^Complete the sentences? with the words and phrases given\.?$/i,
+                /^Complete the paragraph with the words and phrases given\.?$/i,
+                /^Complete the sentence using the correct form of the word in brackets\.?$/i,
+                /^Hoàn thành/i,
+                /^Điền vào/i,
+                /^Chọn từ/i,
+                /^Choose the words/i,
+                /^Select the words/i
+            ];
+
+            // Only match if it's a standalone instruction, not part of a longer text
+            return completionPatterns.some(pattern => pattern.test(text.trim())) && text.length < 100;
+        },
+
+        extractCompletionQuestionText(element, containerDiv) {
+            // Look for preceding instructions
+            let current = element.previousElementSibling;
+            let questionParts = [];
+
+            while (current && questionParts.length < 2) {
+                if (current.nodeType === 1) {
+                    const text = this.cleanTextContent(current.textContent);
+                    const html = this.preserveFormattingHTML(current.innerHTML);
+
+                    if (text && text.length > 10) {
+                        if (this.isCompletionExercise(text)) {
+                            questionParts.unshift(html || text);
+                            break;
                         }
                     }
-                    break;
+                }
+                current = current.previousElementSibling;
+            }
+
+            return questionParts.join(' ').trim();
+        },
+
+        extractWordFormQuestions(div) {
+            const questions = [];
+            const inputs = div.querySelectorAll('input[data-accept]');
+
+            // Group inputs by their parent paragraph to avoid duplicates
+            const inputGroups = new Map();
+
+            inputs.forEach((input) => {
+                const parentP = input.closest('p');
+                if (parentP) {
+                    if (!inputGroups.has(parentP)) {
+                        inputGroups.set(parentP, []);
+                    }
+                    inputGroups.get(parentP).push(input);
+                }
+            });
+
+            inputGroups.forEach((inputList, parentP) => {
+                const questionData = this.getWordFormQuestionContext(inputList[0], div);
+
+                // Only create one question per paragraph
+                if (questionData.question && questionData.question.length > 10) {
+                    questions.push({
+                        id: questions.length + 1,
+                        question: questionData.question,
+                        questionContext: questionData.context || '',
+                        answers: inputList.map(input => input.getAttribute('data-accept')),
+                        rawAnswer: inputList.map(input => input.getAttribute('data-accept')).join(', '),
+                        type: 'word_form',
+                        fullHTML: questionData.fullHTML || ''
+                    });
+                }
+            });
+
+            return questions;
+        },
+
+        getWordFormQuestionContext(inputElement, containerDiv) {
+            const result = {
+                question: '',
+                context: '',
+                fullHTML: ''
+            };
+
+            // Look for the sentence containing the input
+            let current = inputElement.closest('p');
+            if (current) {
+                const text = this.cleanTextContent(current.textContent);
+                const html = this.preserveFormattingHTML(current.innerHTML);
+
+                // Replace the input with a blank
+                const questionText = text.replace(/\s+/g, ' ').trim();
+                const questionHTML = html.replace(/<input[^>]*>/g, '____');
+
+                result.question = questionHTML || questionText;
+                result.fullHTML = current.outerHTML;
+            }
+
+            // Look for instructions above
+            let prevElement = current?.previousElementSibling;
+            if (prevElement) {
+                const instructionText = this.cleanTextContent(prevElement.textContent);
+                const instructionHTML = this.preserveFormattingHTML(prevElement.innerHTML);
+
+                if (instructionText.includes('Complete') || instructionText.includes('correct form') ||
+                    instructionText.includes('brackets') || instructionText.includes('ngoặc')) {
+                    result.context = instructionHTML || instructionText;
                 }
             }
 
-            return {
-                question: question.replace(/<[^>]+>/g, '').trim(),
-                correctAnswers,
-                dapAn: dapAn || 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)'
-            };
-        }
+            return result;
+        },
 
-        // Handle the case with multiple questions separated by <hr> tags
-        if (html.includes('<hr id=')) {
-            const sections = html.split('<hr id=');
-            if (sections.length > 1) {
-                // Process the first section (main question)
-                const mainSection = sections[0];
-                const mainLines = mainSection.split('\n');
-                for (let i = 0; i < mainLines.length; i++) {
-                    if (mainLines[i].includes('<p dir="ltr" style="text-align: justify;">')) {
-                        question = mainLines[i].replace(/<[^>]+>/g, '').trim();
-                        break;
-                    }
+        handleMultiPartQuestions(html) {
+            const questions = [];
+            const sections = html.split(/<hr[^>]*>/);
+
+            sections.forEach((section, index) => {
+                if (!section.trim()) return;
+
+                const sectionDiv = document.createElement('div');
+                sectionDiv.innerHTML = section;
+
+                // Look for quiz lists in this section
+                const quizLists = sectionDiv.querySelectorAll('ol[class*="quiz-list"], ol.true-false, ol.singlechoice, ol.multichoice, ol[data-key]');
+                quizLists.forEach(quizList => {
+                    const questionData = this.extractCompleteQuestion(quizList, sectionDiv);
+                    const correctAnswers = this.extractCorrectAnswers(quizList);
+
+                    questions.push({
+                        id: questions.length + 1,
+                        question: questionData.question || `Question ${questions.length + 1}`,
+                        questionContext: questionData.context || '',
+                        answers: correctAnswers,
+                        rawAnswer: correctAnswers.join(', '),
+                        type: this.determineQuestionType(quizList),
+                        fullHTML: questionData.fullHTML || '',
+                        section: index + 1
+                    });
+                });
+
+                // Handle matching questions
+                const matchingQuestions = this.extractMatchingQuestions(sectionDiv);
+                matchingQuestions.forEach(q => {
+                    q.section = index + 1;
+                    questions.push(q);
+                });
+
+                // Handle completion questions
+                const completionQuestions = this.extractCompletionQuestions(sectionDiv);
+                completionQuestions.forEach(q => {
+                    q.section = index + 1;
+                    questions.push(q);
+                });
+
+                // Handle conversation ordering questions
+                const conversationParts = this.extractConversationParts(sectionDiv);
+                if (conversationParts.length > 0) {
+                    const questionText = this.extractConversationQuestion(sectionDiv);
+                    questions.push({
+                        id: questions.length + 1,
+                        question: questionText || 'Arrange the conversation in correct order:',
+                        questionContext: conversationParts.context || '',
+                        answers: conversationParts.correctOrder ? [conversationParts.correctOrder] : ['Order not found'],
+                        rawAnswer: conversationParts.correctOrder || 'Not found',
+                        type: 'conversation_order',
+                        details: conversationParts.parts,
+                        section: index + 1
+                    });
                 }
 
-                // Process each subsequent section (sub-questions)
-                const results = [];
-                for (let i = 1; i < sections.length; i++) {
-                    const sectionHtml = '<hr id=' + sections[i];
-                    const sectionLines = sectionHtml.split('\n');
+                // Handle fill-in-blank questions
+                const fillInBlanks = this.extractFillInBlanks(sectionDiv, index + 1);
+                questions.push(...fillInBlanks);
 
-                    let hrIndex = -1;
-                    let abovePTags = [];
-                    let belowPTags = [];
-                    let quizListFound = false;
-                    let inputDataAcceptFound = false;
+                // Handle word form questions
+                const wordFormQuestions = this.extractWordFormQuestions(sectionDiv);
+                wordFormQuestions.forEach(q => {
+                    q.section = index + 1;
+                    questions.push(q);
+                });
+            });
 
-                    // Find the HR line and collect surrounding p tags
-                    for (let j = 0; j < sectionLines.length; j++) {
-                        const line = sectionLines[j].trim();
+            return questions;
+        },
 
-                        if (line.includes('<hr id=')) {
-                            hrIndex = j;
+        extractCompleteQuestion(listElement, containerDiv) {
+            const result = {
+                question: '',
+                context: '',
+                fullHTML: ''
+            };
+
+            // Method 1: Look for question in preceding elements
+            let current = listElement.previousElementSibling;
+            let questionParts = [];
+            let elementCount = 0;
+            const maxElements = 15;
+
+            while (current && elementCount < maxElements) {
+                if (current.nodeType === 1) { // Element node
+                    // Get both text content and HTML content
+                    const textContent = this.cleanTextContent(current.textContent);
+                    const htmlContent = this.preserveFormattingHTML(current.innerHTML);
+
+                    if (textContent && textContent.length > 5) {
+                        // Skip solution hints
+                        if (textContent.startsWith('Hướng dẫn giải:') ||
+                            textContent.startsWith('Giải thích:') ||
+                            textContent.startsWith('Lời giải:')) {
+                            current = current.previousElementSibling;
+                            elementCount++;
                             continue;
                         }
 
-                        // Collect p tags above HR
-                        if (hrIndex === -1 && line.startsWith('<p')) {
-                            abovePTags.push(line);
-                        }
+                        // Capture full HTML for context
+                        result.fullHTML = current.outerHTML + '\n' + result.fullHTML;
 
-                        // Collect p tags below HR
-                        if (hrIndex !== -1 && line.startsWith('<p')) {
-                            belowPTags.push(line);
-                        }
-                    }
+                        // Add formatted HTML content to question parts
+                        questionParts.unshift(htmlContent || textContent);
 
-                    // Check for quiz-list below the p tags
-                    for (let j = hrIndex + 1; j < sectionLines.length; j++) {
-                        const line = sectionLines[j].trim();
-                        if (line.includes('class="quiz-list') || line.includes("class='quiz-list")) {
-                            quizListFound = true;
-                            break;
-                        }
-                        if (!line.startsWith('<p') && line !== '') {
-                            break; // Stop if we hit non-p, non-empty line
-                        }
-                    }
-
-                    // Check for input data-accept in p tags
-                    const allPTags = [...abovePTags, ...belowPTags];
-                    for (const pTag of allPTags) {
-                        if (pTag.includes('<input data-accept="')) {
-                            inputDataAcceptFound = true;
+                        // If this looks like a main question, break
+                        if (this.isMainQuestion(textContent)) {
                             break;
                         }
                     }
-
-                    // Build the question from p tags
-                    const subQuestion = allPTags.map(p => p.replace(/<[^>]+>/g, '').trim()).join(' ').trim();
-
-                    let subAnswers = [];
-                    let subDapAn = 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)'; // Default value
-
-                    // Case 1: Quiz list found below p tags
-                    if (quizListFound) {
-                        const tempDiv = document.createElement('div');
-                        tempDiv.innerHTML = sectionLines.join('\n');
-                        const correctLis = tempDiv.querySelectorAll('li.correctAnswer');
-                        subAnswers = Array.from(correctLis).map(li => li.textContent.trim());
-                        subDapAn = subAnswers.length ? subAnswers.join(', ') : 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)';
-                    }
-                    // Case 2: Input data-accept found in p tags
-                    else if (inputDataAcceptFound) {
-                        const inputs = [];
-                        for (const pTag of allPTags) {
-                            const tempDiv = document.createElement('div');
-                            tempDiv.innerHTML = pTag;
-                            const inputElements = tempDiv.querySelectorAll('input[data-accept]');
-                            inputElements.forEach(input => {
-                                inputs.push(input.getAttribute('data-accept').trim());
-                            });
-                        }
-                        subAnswers = inputs;
-                        subDapAn = inputs.join(', ');
-                    }
-                    // Case 3: Check for p dir="ltr" with input data-accept
-                    else {
-                        const pDirLtrTags = [];
-                        // Collect p dir="ltr" tags above and below HR
-                        for (let j = 0; j < sectionLines.length; j++) {
-                            const line = sectionLines[j].trim();
-                            if (line.startsWith('<p dir="ltr"')) {
-                                pDirLtrTags.push(line);
-                            }
-                        }
-
-                        // Check for input data-accept in these p dir="ltr" tags
-                        const inputs = [];
-                        for (const pTag of pDirLtrTags) {
-                            const tempDiv = document.createElement('div');
-                            tempDiv.innerHTML = pTag;
-                            const inputElements = tempDiv.querySelectorAll('input[data-accept]');
-                            inputElements.forEach(input => {
-                                inputs.push(input.getAttribute('data-accept').trim());
-                            });
-                        }
-                        subAnswers = inputs;
-                        subDapAn = inputs.join(', ');
-                    }
-
-                    if (subQuestion || subAnswers.length || subDapAn) {
-                        results.push({
-                            question: subQuestion,
-                            correctAnswers: subAnswers,
-                            dapAn: subDapAn
-                        });
-                    }
                 }
 
-                // Return the first result if only one sub-question, or all if multiple
-                if (results.length === 1) {
-                    return results[0];
-                } else if (results.length > 1) {
-                    // Return the main question first, then sub-questions
-                    const allResults = [{
-                        question: question.replace(/<[^>]+>/g, '').trim(),
-                        correctAnswers: [],
-                        dapAn: 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)'
-                    }].concat(results);
-                    return allResults;
-                }
+                current = current.previousElementSibling;
+                elementCount++;
             }
-        }
 
-        // Original cases (fallbacks)
-        if (question === '[No question]') {
-            // Handle the case where question is formatted with <p dir="ltr"><span style="white-space: pre-wrap;">
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                if (line.includes('<p dir="ltr"><span style="white-space: pre-wrap;">')) {
-                    const startTag = '<p dir="ltr"><span style="white-space: pre-wrap;">';
-                    const startIndex = line.indexOf(startTag);
-                    if (startIndex !== -1) {
-                        const contentStart = startIndex + startTag.length;
-                        const endIndex = line.indexOf('</span>', contentStart);
-                        if (endIndex !== -1) {
-                            question = line.substring(contentStart, endIndex).trim();
-                        }
+            // Method 2: Look for question in parent containers
+            if (questionParts.length === 0) {
+                let parent = listElement.parentElement;
+                let parentLevel = 0;
+
+                while (parent && parentLevel < 3) {
+                    const parentText = this.extractTextFromElement(parent, listElement);
+                    const parentHTML = this.extractHTMLFromElement(parent, listElement);
+
+                    if (parentText && parentText.length > 10) {
+                        questionParts.push(parentHTML || parentText);
+                        result.fullHTML = parent.outerHTML;
+                        break;
                     }
-                    break;
+                    parent = parent.parentElement;
+                    parentLevel++;
                 }
             }
 
-            // Fallback to original extraction methods if not found in other formats
-            if (question === '[No question]') {
-                const cleanLines = div.innerHTML.split('\n').map(l => l.trim()).filter(Boolean);
-                for (let i = 1; i < cleanLines.length; i++) {
-                    if (cleanLines[i].includes('<input') && cleanLines[i].includes('data-accept=')) {
-                        let prevLine = cleanLines[i - 1].replace(/<[^>]*>/g, '').trim();
-                        if (prevLine) {
-                            question = prevLine;
-                        }
-                        const inputMatch = cleanLines[i].match(/data-accept="([^"]+)"/);
-                        if (inputMatch) {
-                            correctAnswers = [inputMatch[1].trim()];
-                            dapAn = inputMatch[1].trim();
-                        }
+            // Method 3: Search entire container for question patterns
+            if (questionParts.length === 0) {
+                const paragraphs = containerDiv.querySelectorAll('p, div:not(ol):not(ul):not(li)');
+                for (const para of paragraphs) {
+                    if (para.contains(listElement)) continue;
+
+                    const text = this.cleanTextContent(para.textContent);
+                    const html = this.preserveFormattingHTML(para.innerHTML);
+
+                    if (this.isMainQuestion(text)) {
+                        questionParts.push(html || text);
+                        result.fullHTML = para.outerHTML;
                         break;
                     }
                 }
             }
 
-            // Extract correct answers using default method if not already found
-            if (correctAnswers.length === 0) {
-                const listToCheck = div.querySelector('.quiz-list.trigger-curriculum-catemake') ||
-                      div.querySelector('.true-false.trigger-curriculum-cate');
+            // Compile the final question
+            result.question = questionParts.join(' ').replace(/\s+/g, ' ').trim();
+            result.context = this.extractAdditionalContext(containerDiv, listElement);
 
-                if (listToCheck) {
-                    const correctItems = listToCheck.querySelectorAll('li.correctAnswer');
-                    correctAnswers = Array.from(correctItems).map(li => li.innerHTML.trim());
-                } else {
-                    const single = div.querySelector('li.correctAnswer');
-                    if (single) correctAnswers.push(single.innerHTML.trim());
+            // Fallback: If still no question, create a descriptive one
+            if (!result.question || result.question.length < 5) {
+                const answerCount = listElement.querySelectorAll('li').length;
+                const questionType = this.determineQuestionType(listElement);
+                result.question = `${questionType} question with ${answerCount} options`;
+            }
+
+            return result;
+        },
+
+        preserveFormattingHTML(html) {
+            if (!html) return '';
+
+            // If already contains LaTeX markers, don't transform further
+            if (html.includes('$') || html.includes('\\(') || html.includes('\\[')) {
+                return html;
+            }
+
+            let s = html;
+
+            // Strip noisy wrapper spans first (Olm editor)
+            s = s.replace(/<span[^>]*class="[^"]*OlmEditorTheme[^"]*"[^>]*>(.*?)<\/span>/gi, '$1')
+                 .replace(/<span[^>]*>(.*?)<\/span>/gi, '$1');
+
+            // Convert HTML sub/sup to LaTeX-style
+            s = s.replace(/<sub[^>]*>\s*([^<]+?)\s*<\/sub>/gi, '_{$1}')
+                 .replace(/<sup[^>]*>\s*([^<]+?)\s*<\/sup>/gi, '^{$1}');
+
+            // Collapse double braces produced by editors: _{{n}} -> _{n}, ^{{o}} -> ^{o}
+            s = s.replace(/_\{\{([^}]+)\}\}/g, '_{$1}')
+                 .replace(/\^\{\{([^}]+)\}\}/g, '^{$1}');
+
+            // Normalize degree: ^{o} -> ^{\circ}
+            s = s.replace(/\^\{?\s*o\s*\}?/g, '^{\\circ}');
+
+            // Keep basic emphasis
+            s = s.replace(/<strong[^>]*>(.*?)<\/strong>/gi, '**$1**')
+                 .replace(/<b[^>]*>(.*?)<\/b>/gi, '**$1**')
+                 .replace(/<em[^>]*>(.*?)<\/em>/gi, '*$1*')
+                 .replace(/<i[^>]*>(.*?)<\/i>/gi, '*$1*');
+
+            // Remove residual tags we don't need
+            s = s.replace(/<\/?(p|div|br|u)[^>]*>/gi, ' ')
+                 .replace(/\s+/g, ' ')
+                 .trim();
+
+            return s;
+        },
+
+        cleanTextContent(text) {
+            if (!text) return '';
+            return text.replace(/\s+/g, ' ').trim();
+        },
+
+        extractTextFromElement(element, excludeElement) {
+            const clone = element.cloneNode(true);
+
+            // Remove the exclude element from the clone
+            if (excludeElement) {
+                const excludeSelectors = [
+                    'ol[class*="quiz-list"]',
+                    'ol.true-false',
+                    'ol.singlechoice',
+                    'ol.multichoice',
+                    'ol[data-key]'
+                ];
+
+                excludeSelectors.forEach(selector => {
+                    const excludeInClone = clone.querySelectorAll(selector);
+                    excludeInClone.forEach(el => el.remove());
+                });
+            }
+
+            return this.cleanTextContent(clone.textContent);
+        },
+
+        extractHTMLFromElement(element, excludeElement) {
+            const clone = element.cloneNode(true);
+
+            // Remove the exclude element from the clone
+            if (excludeElement) {
+                const excludeSelectors = [
+                    'ol[class*="quiz-list"]',
+                    'ol.true-false',
+                    'ol.singlechoice',
+                    'ol.multichoice',
+                    'ol[data-key]'
+                ];
+
+                excludeSelectors.forEach(selector => {
+                    const excludeInClone = clone.querySelectorAll(selector);
+                    excludeInClone.forEach(el => el.remove());
+                });
+            }
+
+            return this.preserveFormattingHTML(clone.innerHTML);
+        },
+
+        isMainQuestion(text) {
+            const questionIndicators = [
+                // English indicators
+                /\?$/,
+                /^(What|Where|When|Why|How|Which|Who)/i,
+                /Choose|Select|Pick|Find/i,
+                /correct|best|appropriate/i,
+
+                // Vietnamese indicators
+                /^(Gì|Ở đâu|Khi nào|Tại sao|Như thế nào|Cái nào|Ai)/i,
+                /Chọn|Hãy|Tìm|Xác định|Cho|Có bao nhiêu|Số/i,
+                /đúng|tốt nhất|phù hợp|công thức|phân tử/i,
+
+                // Question patterns
+                /_{2,}/,
+                /\([0-9]+[Pp]\)/,
+                /Complete|Fill/i,
+                /bao nhiêu/i,
+                /mấy chất/i,
+            ];
+
+            return questionIndicators.some(pattern => pattern.test(text)) && text.length > 10;
+        },
+
+        extractCorrectAnswers(listElement) {
+            const correctItems = listElement.querySelectorAll('li.correctAnswer');
+            return Array.from(correctItems).map(li => {
+                // Preserve formatting in answers too
+                return this.preserveFormattingHTML(li.innerHTML) || this.cleanTextContent(li.textContent);
+            });
+        },
+
+        extractFillInBlanks(sectionDiv, sectionIndex = 0) {
+            const questions = [];
+            const inputs = sectionDiv.querySelectorAll('input[data-accept]');
+
+            if (inputs.length > 0) {
+                inputs.forEach((input, index) => {
+                    const answer = input.getAttribute('data-accept');
+                    const questionData = this.getInputQuestionContext(input, sectionDiv);
+
+                    questions.push({
+                        id: questions.length + 1,
+                        question: questionData.question || `Fill in the blank ${index + 1}`,
+                        questionContext: questionData.context || '',
+                        answers: [answer],
+                        rawAnswer: answer,
+                        type: 'fill_blank',
+                        section: sectionIndex,
+                        fullHTML: questionData.fullHTML || ''
+                    });
+                });
+            }
+
+            return questions;
+        },
+
+        extractInputQuestions(div) {
+            const questions = [];
+            const inputs = div.querySelectorAll('input[data-accept]');
+
+            inputs.forEach((input, index) => {
+                const answer = input.getAttribute('data-accept');
+                const questionData = this.getInputQuestionContext(input, div);
+
+                questions.push({
+                    id: questions.length + 1,
+                    question: questionData.question || `Input question ${index + 1}`,
+                    questionContext: questionData.context || '',
+                    answers: [answer],
+                    rawAnswer: answer,
+                    type: 'input',
+                    fullHTML: questionData.fullHTML || ''
+                });
+            });
+
+            return questions;
+        },
+
+        getInputQuestionContext(inputElement, containerDiv) {
+            const result = {
+                question: '',
+                context: '',
+                fullHTML: ''
+            };
+
+            // Method 1: Look at preceding paragraph
+            let current = inputElement.closest('p');
+            if (current && current.previousElementSibling) {
+                const prevElement = current.previousElementSibling;
+                const text = this.cleanTextContent(prevElement.textContent);
+                const html = this.preserveFormattingHTML(prevElement.innerHTML);
+
+                if (text && text.length > 10) {
+                    result.question = html || text;
+                    result.fullHTML = prevElement.outerHTML;
                 }
             }
 
-            // Extract Đáp án if not already found
-            if (!dapAn) {
-                for (let i = 0; i < lines.length; i++) {
-                    if (lines[i].includes('Đáp án:')) {
-                        const match = lines[i].match(/Đáp án\s*:\s*(.*)/i);
-                        if (match) {
-                            const inputMatch = lines[i].match(/<input[^>]*data-accept="([^"]+)"[^>]*>/);
-                            if (inputMatch) {
-                                dapAn = inputMatch[1].trim();
-                            } else {
-                                dapAn = match[1].trim();
-                            }
+            // Method 2: Look at parent elements
+            if (!result.question) {
+                current = inputElement.parentElement;
+                let attempts = 0;
+
+                while (current && attempts < 5) {
+                    const text = this.cleanTextContent(current.textContent);
+                    const html = this.preserveFormattingHTML(current.innerHTML);
+
+                    if (text && text.length > 20) {
+                        // Remove the input value from the text
+                        const inputValue = inputElement.getAttribute('data-accept') || '';
+                        const cleanText = text.replace(inputValue, '___').replace(/\s+/g, ' ').trim();
+
+                        if (cleanText.length > 10) {
+                            result.question = html || cleanText;
+                            result.fullHTML = current.outerHTML;
                             break;
                         }
                     }
+                    current = current.parentElement;
+                    attempts++;
                 }
             }
-        }
 
-        // Clean up question text - remove HTML tags but preserve line breaks for formatting
-        question = question.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            // Method 3: Extract context from entire container
+            if (!result.context) {
+                const contextElements = containerDiv.querySelectorAll('p, div:not(:has(input))');
+                const contextParts = [];
 
-        // If we have multiple data-accept values but they weren't captured earlier
-        if (correctAnswers.length === 0) {
-            const allInputs = div.querySelectorAll('input[data-accept]');
-            if (allInputs.length > 0) {
-                correctAnswers = Array.from(allInputs).map(input => input.getAttribute('data-accept').trim());
-                dapAn = correctAnswers.join(', ');
-            }
-        }
+                for (const element of contextElements) {
+                    if (element.contains(inputElement)) continue;
 
-        return {
-            question: question,
-            correctAnswers,
-            dapAn: dapAn || (correctAnswers.length ? correctAnswers.join(', ') : 'Không chọn gì (TN) / Không tìm thấy đáp án (TL)')
-        };
-    }
+                    const text = this.cleanTextContent(element.textContent);
+                    const html = this.preserveFormattingHTML(element.innerHTML);
 
-    function processResponse(json) {
-        if (!json || typeof json !== 'object') return;
-
-        const contents = [];
-
-        function extractAllContent(obj) {
-            if (Array.isArray(obj)) {
-                obj.forEach(item => extractAllContent(item));
-            } else if (typeof obj === 'object') {
-                for (const key in obj) {
-                    if (key === 'content') contents.push(obj[key]);
-                    else extractAllContent(obj[key]);
-                }
-            }
-        }
-
-        extractAllContent(json);
-        contents.forEach(b64 => handleContent(b64));
-    }
-
-    function handleContent(b64) {
-        let html = decodeBase64ToHTML(b64);
-        if (!html) return;
-
-        html = convertDollarLatexToMathJax(html);
-        allRawDecoded.push(html + '\n\n');
-
-        // First try to handle as multiple questions
-        if (html.includes('<hr id=')) {
-            const sections = html.split('<hr id=');
-            if (sections.length > 1) {
-                // Process the first section (main question)
-                const mainSection = sections[0];
-                const mainResult = extractQuestionAndAnswer(mainSection);
-                if (mainResult.question && mainResult.question !== '[No question]') {
-                    addToResults(mainResult);
-                }
-
-                // Process each subsequent section (sub-questions)
-                for (let i = 1; i < sections.length; i++) {
-                    const sectionHtml = '<hr id=' + sections[i];
-                    const result = extractQuestionAndAnswer(sectionHtml);
-
-                    // Handle case where extractQuestionAndAnswer returns an array of results
-                    if (Array.isArray(result)) {
-                        result.forEach(r => addToResults(r));
-                    } else if (result.question && result.question !== '[No question]') {
-                        addToResults(result);
+                    if (text && text.length > 20) {
+                        contextParts.push(html || text);
                     }
                 }
-                return;
-            }
-        }
 
-        // Fallback to single question processing
-        const result = extractQuestionAndAnswer(html);
-        if (Array.isArray(result)) {
-            result.forEach(r => addToResults(r));
-        } else {
-            addToResults(result);
-        }
-    }
-
-    function addToResults(result) {
-        const { question, correctAnswers, dapAn } = result;
-
-        // Build parts conditionally
-        const answerPart = correctAnswers.length > 0
-        ? `<strong>Answer(s):</strong><br>${correctAnswers.map(ans => `<span style="font-size: 200%">•</span> <span style="font-size: 80%">${ans}</span>`).join('<br>')}`
-        : '';
-        const dapAnPart = dapAn ? `<strong>Dap An:</strong> ${dapAn}` : '';
-
-        // Format with sections
-        let formatted = `<strong>Question ${questionCounter++}: ${question}</strong>`;
-        if (answerPart) formatted += `<br>${answerPart}`;
-        if (dapAnPart) formatted += `<br>${dapAnPart}`;
-        formatted += '<br>'; // Single line break at end
-
-        if (correctAnswers.length || dapAn) {
-            allParsedCorrect.push(formatted);
-        }
-
-        if (dapAn) {
-            allDapAnOnly.push(dapAn);
-        }
-    }
-
-    function createGUI() {
-        if (container) {
-            // If UI already exists, just update the content
-            updateContent();
-            return;
-        }
-
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        const iconColor = prefersDark ? '#fff' : '#000';
-        const backgroundColor = 'transparent';
-        const opacity = '0.8';
-
-        toggleBtn = document.createElement('button');
-        toggleBtn.innerHTML = `
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${iconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="3" y1="7" x2="21" y2="7" />
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <line x1="3" y1="17" x2="21" y2="17" />
-        </svg>
-    `;
-        Object.assign(toggleBtn.style, {
-            position: 'fixed', top: '10px', right: '10px', zIndex: '10000', opacity,
-            width: '40px', height: '40px', backgroundColor,
-            border: '2px solid ' + iconColor, borderRadius: '50%',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: '0'
-        });
-
-        downloadBtn = document.createElement('button');
-        downloadBtn.innerHTML = `
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${iconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="7 10 12 15 17 10"/>
-            <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>
-    `;
-        Object.assign(downloadBtn.style, {
-            position: 'fixed', top: '10px', right: '60px', zIndex: '10000', opacity,
-            width: '40px', height: '40px', backgroundColor,
-            border: '2px solid ' + iconColor, borderRadius: '50%',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: '0'
-        });
-
-        downloadBtn.onclick = () => {
-            const blob = new Blob([allRawDecoded.join('')], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = 'olm_raw_decoded.txt';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-        };
-
-        container = document.createElement('div');
-        Object.assign(container.style, {
-            position: 'fixed', top: '60px', right: '10px', width: '250px', height: '40%',
-            overflowY: 'auto', backgroundColor: 'white', zIndex: '9999', padding: '10px',
-            boxShadow: '0 0 6px rgba(0,0,0,0.3)', borderRadius: '8px', display: 'none',
-            fontSize: '14px', lineHeight: '1.5'
-        });
-
-        contentArea = document.createElement('div');
-        contentArea.id = 'content-area';
-        Object.assign(contentArea.style, {
-            whiteSpace: 'normal',
-            wordBreak: 'break-word'
-        });
-
-        const tabContainer = document.createElement('div');
-        tabContainer.style.marginBottom = '10px';
-
-        const answerTab = document.createElement('button');
-        answerTab.textContent = 'Answers';
-        const dapAnTab = document.createElement('button');
-        dapAnTab.textContent = 'Đáp án';
-
-        const refreshBtn = document.createElement('button');
-        refreshBtn.innerHTML = `
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${iconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="23 4 23 10 17 10"></polyline>
-                <polyline points="1 20 1 14 7 14"></polyline>
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-            </svg>
-        `;
-        refreshBtn.title = "Refresh questions";
-        Object.assign(refreshBtn.style, {
-            padding: '6px 8px',
-            marginLeft: '6px',
-            border: 'none',
-            backgroundColor: '#4CAF50',
-            color: 'white',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-        });
-
-        [answerTab, dapAnTab].forEach(btn => {
-            Object.assign(btn.style, {
-                padding: '6px 12px', marginRight: '6px',
-                border: 'none', backgroundColor: '#2196F3',
-                color: 'white', borderRadius: '4px', cursor: 'pointer'
-            });
-        });
-
-        answerTab.onclick = () => {
-            updateContent('answers');
-        };
-
-        dapAnTab.onclick = () => {
-            updateContent('dapAn');
-        };
-
-        refreshBtn.onclick = () => {
-            if (!firstGetQuestionRequest) {
-                alert('No initial get-question-of-ids request found');
-                return;
+                result.context = contextParts.slice(0, 3).join('\n\n');
             }
 
-            // Clear previous data
-            allParsedCorrect = [];
-            allRawDecoded = [];
-            allDapAnOnly = [];
-            questionCounter = 1;
-            contentArea.innerHTML = 'Refreshing...';
+            return result;
+        },
 
-            // Create a new XHR request with the stored data
-            const xhr = new XMLHttpRequest();
-            xhr.open(firstGetQuestionRequest.method, firstGetQuestionRequest.url, true);
+        extractAdditionalContext(containerDiv, listElement) {
+            // Look for images, diagrams, or additional context
+            const contextElements = containerDiv.querySelectorAll('img, figure, .context, .reading-passage, p:not(:empty)');
+            const context = [];
 
-            // Set headers if they exist
-            if (firstGetQuestionRequest.headers) {
-                for (const header in firstGetQuestionRequest.headers) {
-                    xhr.setRequestHeader(header, firstGetQuestionRequest.headers[header]);
-                }
-            }
+            for (const element of contextElements) {
+                if (element === listElement || listElement.contains(element)) continue;
 
-            xhr.onload = function() {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    try {
-                        const response = JSON.parse(xhr.responseText);
-                        processResponse(response);
-                        updateContent();
-                    } catch (e) {
-                        console.error("Error parsing response", e);
-                        contentArea.innerHTML = 'Error refreshing data';
-                    }
+                if (element.tagName === 'IMG') {
+                    context.push(`[Image: ${element.alt || element.src}]`);
                 } else {
-                    contentArea.innerHTML = 'Error refreshing data';
+                    const text = this.cleanTextContent(element.textContent);
+                    const html = this.preserveFormattingHTML(element.innerHTML);
+
+                    if (text && text.length > 20 && !text.startsWith('Hướng dẫn')) {
+                        context.push(html || text);
+                    }
                 }
-            };
-
-            xhr.onerror = function() {
-                contentArea.innerHTML = 'Error refreshing data';
-            };
-
-            // Send the request with the original data if it exists
-            xhr.send(firstGetQuestionRequest.data || null);
-        };
-
-        tabContainer.appendChild(answerTab);
-        tabContainer.appendChild(dapAnTab);
-        tabContainer.appendChild(refreshBtn);
-        container.appendChild(tabContainer);
-        container.appendChild(contentArea);
-
-        toggleBtn.onclick = () => {
-            container.style.display = container.style.display === 'none' ? 'block' : 'none';
-            if (window.MathJax && container.style.display === 'block') {
-                MathJax.typesetPromise([contentArea]);
             }
-        };
 
-        document.body.appendChild(toggleBtn);
-        document.body.appendChild(downloadBtn);
-        document.body.appendChild(container);
+            return context.join('\n\n');
+        },
 
-        const style = document.createElement('style');
-        style.textContent = `
-        #content-area img {
-            max-width: 100%;
-            height: auto;
-            display: block;
-            margin: 10px 0;
-        }
-    `;
-        document.head.appendChild(style);
-
-        const mj = document.createElement('script');
-        mj.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js';
-        mj.async = true;
-        mj.onload = () => {
-            if (container.style.display === 'block') {
-                MathJax.typesetPromise([contentArea]);
+        extractConversationQuestion(sectionDiv) {
+            const elements = sectionDiv.querySelectorAll('*');
+            for (const element of elements) {
+                const text = this.cleanTextContent(element.textContent);
+                if (text.includes('arrange') || text.includes('order') || text.includes('sắp xếp')) {
+                    return this.preserveFormattingHTML(element.innerHTML) || text;
+                }
             }
-        };
-        document.head.appendChild(mj);
+            return 'Arrange the conversation in correct order:';
+        },
 
-        // Initial content update
-        updateContent();
-    }
+        extractConversationParts(sectionDiv) {
+            const parts = [];
+            const correctOrder = sectionDiv.querySelector('li.correctAnswer')?.textContent.trim();
 
-    function updateContent(type = 'answers') {
-        if (!contentArea) return;
+            // Get context before the conversation parts
+            let context = '';
+            const firstParagraph = sectionDiv.querySelector('p');
+            if (firstParagraph && !firstParagraph.textContent.match(/^[a-z]\./)) {
+                context = this.preserveFormattingHTML(firstParagraph.innerHTML) ||
+                        this.cleanTextContent(firstParagraph.textContent);
+            }
 
-        if (type === 'answers') {
-            contentArea.innerHTML = allParsedCorrect.join('<br>');
-        } else {
-            contentArea.innerHTML = allDapAnOnly.length
-                ? allDapAnOnly.map((a, i) => `<strong>Đáp án ${i + 1}:</strong> ${a}`).join('<br>')
-            : '[No Đáp án found]';
+            // Extract conversation parts from paragraph text
+            const paragraphs = sectionDiv.querySelectorAll('p');
+            paragraphs.forEach(p => {
+                const text = this.cleanTextContent(p.textContent);
+                const match = text.match(/^([a-z])\.\s(.+)/);
+                if (match) {
+                    parts.push({
+                        letter: match[1],
+                        text: match[2]
+                    });
+                }
+            });
+
+            return {
+                parts: parts,
+                correctOrder: correctOrder,
+                context: context
+            };
+        },
+
+        determineQuestionType(listElement) {
+            if (listElement.classList.contains('true-false')) return 'True/False';
+            if (listElement.classList.contains('singlechoice')) return 'Single Choice';
+            if (listElement.classList.contains('multichoice')) return 'Multiple Choice';
+
+            // Determine by answer count
+            const answerCount = listElement.querySelectorAll('li').length;
+            if (answerCount === 2) return 'True/False';
+            if (answerCount > 2) return 'Multiple Choice';
+
+            return 'Quiz';
         }
-
-        if (window.MathJax) {
-            MathJax.typesetPromise([contentArea]);
-        }
-    }
-
-    // [Rest of your existing code...]
-    // Keep all the remaining functions exactly as they were
-
-    const open = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function (...args) {
-        this._url = args[1];
-        this._method = args[0];
-        return open.apply(this, args);
     };
 
-    const setRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
-    XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
-        if (!this._headers) {
-            this._headers = {};
-        }
-        this._headers[header] = value;
-        return setRequestHeader.apply(this, arguments);
-    };
+    // Network interception
+    const networkHandler = {
+        init() {
+            this.interceptXHR();
+        },
 
-    const send = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.send = function (...args) {
-        const requestData = args[0];
-        this.addEventListener("load", function () {
-            if (this._url && this._url.includes("get-question-of-ids")) {
+        interceptXHR() {
+            const originalOpen = XMLHttpRequest.prototype.open;
+            const originalSend = XMLHttpRequest.prototype.send;
+            const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+            XMLHttpRequest.prototype.open = function(method, url, ...args) {
+                this._intercepted = { method, url, headers: {} };
+                return originalOpen.call(this, method, url, ...args);
+            };
+
+            XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+                if (this._intercepted) {
+                    this._intercepted.headers[header] = value;
+                }
+                return originalSetRequestHeader.call(this, header, value);
+            };
+
+            XMLHttpRequest.prototype.send = function(data) {
+                if (this._intercepted) {
+                    this._intercepted.data = data;
+
+                    this.addEventListener('load', () => {
+                        if (this._intercepted.url.includes('get-question-of-ids')) {
+                            this.handleResponse();
+                        }
+                    });
+                }
+                return originalSend.call(this, data);
+            };
+
+            XMLHttpRequest.prototype.handleResponse = function() {
                 try {
-                    // Store the first get-question-of-ids request details
-                    if (!firstGetQuestionRequest) {
-                        firstGetQuestionRequest = {
-                            url: this._url,
-                            method: this._method,
-                            headers: this._headers,
-                            data: requestData
-                        };
+                    if (!state.firstRequest) {
+                        state.firstRequest = { ...this._intercepted };
                     }
 
                     const response = JSON.parse(this.responseText);
-                    processResponse(response);
-                    setTimeout(() => {
-                        createGUI();
-                    }, 500);
-                } catch (e) {
-                    console.error("Error parsing response", e);
+                    dataProcessor.processResponse(response);
+                } catch (error) {
+                    console.error('Response processing failed:', error);
                 }
-            }
-        });
-        return send.apply(this, args);
+            };
+        }
     };
+
+    // Data processing
+    const dataProcessor = {
+        processResponse(jsonResponse) {
+            console.log('📦 Processing response data...');
+            const contents = this.extractContents(jsonResponse);
+
+            contents.forEach(base64Content => {
+                const decoded = utils.decodeBase64ToHTML(base64Content);
+                if (decoded) {
+                    const processed = utils.convertLatexToMathJax(decoded);
+                    state.rawData.push(processed);
+
+                    // Use the placeholder extraction engine
+                    const questions = answerExtractor.extractAnswersFromHTML(processed);
+                    state.questions.push(...questions);
+                }
+            });
+
+            ui.updateContent();
+        },
+
+        extractContents(obj) {
+            const contents = [];
+
+            const traverse = (item) => {
+                if (Array.isArray(item)) {
+                    item.forEach(traverse);
+                } else if (item && typeof item === 'object') {
+                    if (item.content) contents.push(item.content);
+                    Object.values(item).forEach(traverse);
+                }
+            };
+
+            traverse(obj);
+            return contents;
+        }
+    };
+
+    // Enhanced UI
+    const ui = {
+        elements: {},
+
+        init() {
+            this.createStyles();
+            this.createToggleButton();
+            this.createPanel();
+            this.setupEventListeners();
+        },
+
+        createStyles() {
+            const style = document.createElement('style');
+            style.textContent = `
+                .olm-sniffer-toggle {
+                    position: fixed;
+                    top: 10px;
+                    right: 10px;
+                    z-index: 10000;
+                    opacity: 0.8;
+                    width: 40px;
+                    height: 40px;
+                    background-color: transparent;
+                    border: 2px solid rgba(0, 0, 0, 0.4);
+                    border-radius: 50%;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 0;
+                    transition: all 0.2s ease;
+                }
+        
+                .olm-sniffer-toggle:hover {
+                    opacity: 1;
+                    border-color: rgba(0, 0, 0, 0.6);
+                }
+        
+                .olm-sniffer-toggle:hover svg {
+                    stroke: rgba(0, 0, 0, 0.6);
+                }
+        
+                .olm-sniffer-toggle.active {
+                    opacity: 1;
+                    border-color: rgba(0, 0, 0, 0.6);
+                }
+        
+                .olm-sniffer-toggle.active svg {
+                    stroke: rgba(0, 0, 0, 0.6);
+                }
+        
+                .olm-sniffer-panel {
+                    position: fixed;
+                    top: 60px;
+                    right: 15px;
+                    width: 280px;
+                    height: 45vh;
+                    background: rgba(255, 255, 255, 0.95);
+                    backdrop-filter: blur(15px);
+                    border-radius: 12px;
+                    box-shadow: 0 15px 30px rgba(0,0,0,0.1);
+                    z-index: 9999;
+                    display: none;
+                    flex-direction: column;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    overflow: hidden;
+                    border: 1px solid rgba(255,255,255,0.2);
+                }
+        
+                .olm-sniffer-panel.visible {
+                    display: flex;
+                    animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                }
+        
+                @keyframes slideIn {
+                    from {
+                        opacity: 0;
+                        transform: translateX(20px);
+                    }
+                    to {
+                        opacity: 1;
+                        transform: translateX(0);
+                    }
+                }
+        
+                .olm-sniffer-header {
+                    padding: 10px 12px;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+        
+                .olm-sniffer-title {
+                    font-size: 12px;
+                    font-weight: 600;
+                    margin: 0;
+                }
+        
+                .olm-sniffer-stats {
+                    font-size: 9px;
+                    opacity: 0.9;
+                }
+        
+                .olm-sniffer-tabs {
+                    display: flex;
+                    background: rgba(0,0,0,0.02);
+                    padding: 2px;
+                    margin: 8px;
+                    border-radius: 8px;
+                }
+        
+                .olm-sniffer-tab {
+                    flex: 1;
+                    padding: 6px 8px;
+                    border: none;
+                    background: transparent;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                    font-size: 10px;
+                    font-weight: 500;
+                }
+        
+                .olm-sniffer-tab.active {
+                    background: white;
+                    color: #667eea;
+                    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+                }
+        
+                .olm-sniffer-content {
+                    flex: 1;
+                    overflow-y: auto;
+                    padding: 0 8px 8px;
+                }
+        
+                .olm-sniffer-question {
+                    background: white;
+                    border-radius: 8px;
+                    padding: 8px;
+                    margin-bottom: 6px;
+                    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+                    border-left: 2px solid #667eea;
+                    overflow: hidden;
+                }
+        
+                .olm-sniffer-question-title {
+                    font-weight: 600;
+                    color: #2d3748;
+                    margin-bottom: 4px;
+                    font-size: 10px;
+                }
+        
+                .olm-sniffer-question-text {
+                    color: #4a5568;
+                    font-size: 12px;
+                    line-height: 1.4;
+                    margin-bottom: 6px;
+                    overflow: hidden;
+                }
+        
+                .olm-sniffer-answers {
+                    background: rgba(102, 126, 234, 0.05);
+                    border-radius: 4px;
+                    padding: 6px;
+                    overflow: hidden;
+                }
+        
+                .olm-sniffer-answer {
+                    display: flex;
+                    align-items: flex-start;
+                    margin-bottom: 3px;
+                    font-size: 12px;
+                    color: #2d3748;
+                    line-height: 1.3;
+                    overflow: hidden;
+                    word-wrap: break-word;
+                }
+        
+                .olm-sniffer-answer:last-child {
+                    margin-bottom: 0;
+                }
+        
+                .olm-sniffer-answer::before {
+                    content: '✓';
+                    color: #48bb78;
+                    font-weight: bold;
+                    margin-right: 4px;
+                    margin-top: 1px;
+                    flex-shrink: 0;
+                    font-size: 10px;
+                }
+        
+                .olm-sniffer-actions {
+                    padding: 8px;
+                    border-top: 1px solid rgba(0,0,0,0.1);
+                    display: flex;
+                    gap: 4px;
+                }
+        
+                .olm-sniffer-btn {
+                    flex: 1;
+                    padding: 6px 8px;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 9px;
+                    font-weight: 500;
+                    transition: all 0.2s ease;
+                }
+        
+                .olm-sniffer-btn-primary {
+                    background: #667eea;
+                    color: white;
+                }
+        
+                .olm-sniffer-btn-primary:hover {
+                    background: #5a67d8;
+                }
+        
+                .olm-sniffer-btn-secondary {
+                    background: rgba(0,0,0,0.05);
+                    color: #4a5568;
+                }
+        
+                .olm-sniffer-btn-secondary:hover {
+                    background: rgba(0,0,0,0.1);
+                }
+        
+                .olm-sniffer-empty {
+                    text-align: center;
+                    padding: 20px 10px;
+                    color: #a0aec0;
+                    font-size: 9px;
+                }
+        
+                /* Image handling - SMALLER */
+                .olm-sniffer-answer img {
+                    max-width: 100% !important;
+                    width: auto !important;
+                    height: auto !important;
+                    max-height: 80px !important;
+                    border-radius: 2px;
+                    margin: 2px 0;
+                    display: block;
+                    object-fit: contain;
+                }
+        
+                .olm-sniffer-question-text img {
+                    max-width: 100% !important;
+                    width: auto !important;
+                    height: auto !important;
+                    max-height: 80px !important;
+                    border-radius: 2px;
+                    margin: 2px 0;
+                    display: block;
+                    object-fit: contain;
+                }
+        
+                /* MathJax styling */
+                .olm-sniffer-answer .MathJax {
+                    font-size: 12px !important;
+                }
+        
+                .olm-sniffer-answer .MathJax_Display {
+                    font-size: 13px !important;
+                }
+        
+                /* Highlight effect for active answer */
+                .olm-sniffer-question.highlighted {
+                    border-left-color: #48bb78 !important;
+                    background: rgba(72, 187, 120, 0.1) !important;
+                    transform: scale(1.005);
+                    transition: all 0.3s ease;
+                    box-shadow: 0 2px 8px rgba(72, 187, 120, 0.2) !important;
+                }
+        
+                /* Smooth scrolling for the content area */
+                .olm-sniffer-content {
+                    scroll-behavior: smooth;
+                }
+        
+                /* Dark mode support */
+                @media (prefers-color-scheme: dark) {
+                    .olm-sniffer-panel {
+                        background: rgba(26, 32, 44, 0.95);
+                        color: #e2e8f0;
+                    }
+        
+                    .olm-sniffer-question {
+                        background: rgba(45, 55, 72, 0.8);
+                        color: #e2e8f0;
+                    }
+        
+                    .olm-sniffer-answer {
+                        color: #e2e8f0;
+                    }
+                }
+            `;
+            document.head.appendChild(style);
+        },
+
+        createToggleButton() {
+            const button = document.createElement('button');
+            button.className = 'olm-sniffer-toggle';
+            button.innerHTML = `
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="rgba(0, 0, 0, 0.4)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="3" y1="7" x2="21" y2="7" />
+                    <line x1="3" y1="12" x2="21" y2="12" />
+                    <line x1="3" y1="17" x2="21" y2="17" />
+                </svg>
+            `;
+
+            // Apply the exact styling from your code
+            Object.assign(button.style, {
+                position: 'fixed',
+                top: '10px',
+                right: '10px',
+                zIndex: '10000',
+                opacity: '0.8',
+                width: '40px',
+                height: '40px',
+                backgroundColor: 'transparent',
+                border: '2px solid rgba(0, 0, 0, 0.4)',
+                borderRadius: '50%',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0'
+            });
+
+            this.elements.toggle = button;
+            document.body.appendChild(button);
+        },
+
+        createPanel() {
+            const panel = document.createElement('div');
+            panel.className = 'olm-sniffer-panel';
+
+            panel.innerHTML = `
+                <div class="olm-sniffer-header">
+                    <div>
+                        <h3 class="olm-sniffer-title">Answer Sniffer</h3>
+                        <div class="olm-sniffer-stats">
+                            <span id="question-count">0</span> questions found
+                        </div>
+                    </div>
+                </div>
+
+                <div class="olm-sniffer-tabs">
+                    <button class="olm-sniffer-tab active" data-tab="formatted">Formatted</button>
+                    <button class="olm-sniffer-tab" data-tab="raw">Raw Answers</button>
+                </div>
+
+                <div class="olm-sniffer-content" id="content-area">
+                    <div class="olm-sniffer-empty">
+                        <p>No questions captured yet</p>
+                        <p style="font-size: 12px; margin-top: 8px;">Start a quiz to see answers appear here</p>
+                    </div>
+                </div>
+
+                <div class="olm-sniffer-actions">
+                    <button class="olm-sniffer-btn olm-sniffer-btn-secondary" id="refresh-btn">
+                        🔄 Refresh
+                    </button>
+                    <button class="olm-sniffer-btn olm-sniffer-btn-primary" id="download-btn">
+                        📥 Download
+                    </button>
+                </div>
+            `;
+
+            this.elements.panel = panel;
+            this.elements.content = panel.querySelector('#content-area');
+            this.elements.questionCount = panel.querySelector('#question-count');
+
+            document.body.appendChild(panel);
+        },
+
+        setupEventListeners() {
+            // Toggle button
+            this.elements.toggle.addEventListener('click', () => this.togglePanel());
+
+            // Tab switching
+            this.elements.panel.querySelectorAll('.olm-sniffer-tab').forEach(tab => {
+                tab.addEventListener('click', (e) => {
+                    const tabName = e.target.dataset.tab;
+                    this.switchTab(tabName);
+                });
+            });
+
+            // Action buttons
+            const refreshBtn = this.elements.panel.querySelector('#refresh-btn');
+            const downloadBtn = this.elements.panel.querySelector('#download-btn');
+
+            refreshBtn.addEventListener('click', () => this.refreshData());
+            downloadBtn.addEventListener('click', () => this.downloadData());
+        },
+
+        togglePanel() {
+            state.isVisible = !state.isVisible;
+
+            if (state.isVisible) {
+                this.elements.panel.classList.add('visible');
+                this.elements.toggle.classList.add('active');
+                this.updateContent();
+            } else {
+                this.elements.panel.classList.remove('visible');
+                this.elements.toggle.classList.remove('active');
+            }
+        },
+
+        switchTab(tabName) {
+            state.currentTab = tabName;
+
+            // Update tab buttons
+            this.elements.panel.querySelectorAll('.olm-sniffer-tab').forEach(tab => {
+                tab.classList.toggle('active', tab.dataset.tab === tabName);
+            });
+
+            this.updateContent();
+        },
+
+        updateContent() {
+            if (!this.elements.content) return;
+
+            this.elements.questionCount.textContent = state.questions.length;
+
+            if (state.questions.length === 0) {
+                this.elements.content.innerHTML = `
+                    <div class="olm-sniffer-empty">
+                        <p>No questions captured yet</p>
+                        <p style="font-size: 12px; margin-top: 8px;">Start a quiz to see answers appear here</p>
+                    </div>
+                `;
+                return;
+            }
+
+            if (state.currentTab === 'formatted') {
+                this.renderFormattedQuestions();
+            } else {
+                this.renderRawAnswers();
+            }
+        },
+
+        renderFormattedQuestions() {
+            const html = state.questions.map((q, index) => `
+                <div class="olm-sniffer-question">
+                    <div class="olm-sniffer-question-title">Question ${index + 1}</div>
+                    <div class="olm-sniffer-question-text">${q.question}</div>
+                    <div class="olm-sniffer-answers">
+                        ${q.answers.map(answer => `<div class="olm-sniffer-answer">${answer}</div>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+
+            this.elements.content.innerHTML = html;
+
+            // Process images in answers to make them responsive
+            this.elements.content.querySelectorAll('.olm-sniffer-answer img').forEach(img => {
+                img.style.maxWidth = '100%';
+                img.style.height = 'auto';
+                img.style.maxHeight = '150px';
+                img.style.borderRadius = '4px';
+                img.style.margin = '4px 0';
+                img.style.display = 'block';
+            });
+
+            // Render math after content is inserted with proper queuing
+            if (mathRenderer.isLoaded) {
+                mathRenderer.renderMath(this.elements.content);
+            } else {
+                // Queue for rendering when MathJax loads
+                mathRenderer.queue.push({
+                    element: this.elements.content,
+                    callback: null
+                });
+            }
+        },
+
+        renderRawAnswers() {
+            const html = state.questions.map((q, index) =>
+                `<div class="olm-sniffer-question">
+                    <div class="olm-sniffer-question-title">Answer ${index + 1}</div>
+                    <div class="olm-sniffer-answer">${q.rawAnswer}</div>
+                </div>`
+            ).join('');
+
+            this.elements.content.innerHTML = html;
+
+            // Process images in answers to make them responsive
+            this.elements.content.querySelectorAll('.olm-sniffer-answer img').forEach(img => {
+                img.style.maxWidth = '100%';
+                img.style.height = 'auto';
+                img.style.maxHeight = '150px';
+                img.style.borderRadius = '4px';
+                img.style.margin = '4px 0';
+                img.style.display = 'block';
+            });
+
+            // Render math after content is inserted with proper queuing
+            if (mathRenderer.isLoaded) {
+                mathRenderer.renderMath(this.elements.content);
+            } else {
+                // Queue for rendering when MathJax loads
+                mathRenderer.queue.push({
+                    element: this.elements.content,
+                    callback: null
+                });
+            }
+        },
+
+        refreshData() {
+            if (!state.firstRequest) {
+                alert('No initial request found to refresh');
+                return;
+            }
+
+            // Clear existing data
+            state.questions = [];
+            state.rawData = [];
+
+            this.elements.content.innerHTML = '<div class="olm-sniffer-empty"><p>Refreshing...</p></div>';
+
+            // Make new request
+            const xhr = new XMLHttpRequest();
+            xhr.open(state.firstRequest.method, state.firstRequest.url, true);
+
+            Object.entries(state.firstRequest.headers || {}).forEach(([key, value]) => {
+                xhr.setRequestHeader(key, value);
+            });
+
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const response = JSON.parse(xhr.responseText);
+                        dataProcessor.processResponse(response);
+                    } catch (error) {
+                        console.error('Refresh failed:', error);
+                    }
+                }
+            };
+
+            xhr.send(state.firstRequest.data || null);
+        },
+
+        downloadData() {
+            const data = state.rawData.join('\n\n---\n\n');
+            const blob = new Blob([data], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `olm-answers-${new Date().toISOString().split('T')[0]}.txt`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            URL.revokeObjectURL(url);
+        }
+    };
+
+    // Initialize the application
+    function init() {
+        console.log('🚀 Enhanced OLM Answers Sniffer initialized');
+        networkHandler.init();
+        ui.init();
+        autoScroller.init();
+        mathRenderer.init();
+    }
+
+    // Start the application
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+
 })();
