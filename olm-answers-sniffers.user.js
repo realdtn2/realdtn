@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OLM Answers Sniffers
 // @namespace    http://tampermonkey.net/
-// @version      2.0.1
+// @version      2.0.2
 // @description  Sniff answers from the network requests
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -1559,22 +1559,45 @@
                     font-size: 9px;
                 }
         
-                /* Resize handle - WHITE INDICATOR */
+                /* Resize handle - MOBILE FRIENDLY */
                 .olm-sniffer-resize-handle {
                     position: absolute;
                     bottom: 0;
                     left: 0;
-                    width: 20px;
-                    height: 20px;
+                    width: 30px;
+                    height: 30px;
                     background: linear-gradient(-45deg, transparent 0%, transparent 30%, rgba(255,255,255,0.6) 30%, rgba(255,255,255,0.6) 40%, transparent 40%, transparent 60%, rgba(255,255,255,0.6) 60%, rgba(255,255,255,0.6) 70%, transparent 70%);
                     cursor: nw-resize;
                     opacity: 0.8;
                     transition: opacity 0.2s ease;
+                    touch-action: none;
+                    -webkit-touch-callout: none;
+                    -webkit-user-select: none;
+                    -khtml-user-select: none;
+                    -moz-user-select: none;
+                    -ms-user-select: none;
+                    user-select: none;
                 }
         
                 .olm-sniffer-resize-handle:hover {
                     opacity: 1;
                     background: linear-gradient(-45deg, transparent 0%, transparent 30%, rgba(255,255,255,0.8) 30%, rgba(255,255,255,0.8) 40%, transparent 40%, transparent 60%, rgba(255,255,255,0.8) 60%, rgba(255,255,255,0.8) 70%, transparent 70%);
+                }
+        
+                /* Mobile-specific styles */
+                @media (max-width: 768px) {
+                    .olm-sniffer-resize-handle {
+                        width: 40px;
+                        height: 40px;
+                        opacity: 0.9;
+                    }
+                    
+                    .olm-sniffer-panel {
+                        width: 90vw;
+                        height: 50vh;
+                        right: 5vw;
+                        top: 50px;
+                    }
                 }
         
                 /* Image handling - SMALLER */
@@ -1639,22 +1662,47 @@
         
             const startResize = (e) => {
                 isResizing = true;
-                startX = e.clientX;
-                startY = e.clientY;
+                
+                // Handle both mouse and touch events
+                if (e.type === 'touchstart') {
+                    e.preventDefault();
+                    startX = e.touches[0].clientX;
+                    startY = e.touches[0].clientY;
+                } else {
+                    startX = e.clientX;
+                    startY = e.clientY;
+                }
+                
                 startWidth = parseInt(window.getComputedStyle(this.elements.panel).width, 10);
                 startHeight = parseInt(window.getComputedStyle(this.elements.panel).height, 10);
                 
+                // Add both mouse and touch event listeners
                 document.addEventListener('mousemove', doResize);
                 document.addEventListener('mouseup', stopResize);
+                document.addEventListener('touchmove', doResize, { passive: false });
+                document.addEventListener('touchend', stopResize);
+                
                 e.preventDefault();
             };
         
             const doResize = (e) => {
                 if (!isResizing) return;
                 
+                let clientX, clientY;
+                
+                // Handle both mouse and touch events
+                if (e.type === 'touchmove') {
+                    e.preventDefault();
+                    clientX = e.touches[0].clientX;
+                    clientY = e.touches[0].clientY;
+                } else {
+                    clientX = e.clientX;
+                    clientY = e.clientY;
+                }
+                
                 // FIXED: Correct the resize direction
-                const newWidth = startWidth - (e.clientX - startX);  // Subtract instead of add
-                const newHeight = startHeight + (e.clientY - startY); // Add for height (correct)
+                const newWidth = startWidth - (clientX - startX);  // Subtract instead of add
+                const newHeight = startHeight + (clientY - startY); // Add for height (correct)
                 
                 // Apply constraints
                 const minWidth = 200;
@@ -1673,9 +1721,13 @@
                 isResizing = false;
                 document.removeEventListener('mousemove', doResize);
                 document.removeEventListener('mouseup', stopResize);
+                document.removeEventListener('touchmove', doResize);
+                document.removeEventListener('touchend', stopResize);
             };
         
+            // Add both mouse and touch event listeners
             this.elements.resizeHandle.addEventListener('mousedown', startResize);
+            this.elements.resizeHandle.addEventListener('touchstart', startResize, { passive: false });
         },
 
         createToggleButton() {
@@ -1959,4 +2011,3 @@
     }
 
 })();
-
