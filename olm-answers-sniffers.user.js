@@ -1335,7 +1335,7 @@
                     width: 40px;
                     height: 40px;
                     background-color: transparent;
-                    border: 2px solid rgba(0, 0, 0, 0.4);
+                    border: 2px solid rgba(255, 255, 255, 0.4);
                     border-radius: 50%;
                     cursor: pointer;
                     display: flex;
@@ -1347,20 +1347,20 @@
         
                 .olm-sniffer-toggle:hover {
                     opacity: 1;
-                    border-color: rgba(0, 0, 0, 0.6);
+                    border-color: rgba(255, 255, 255, 0.6);
                 }
         
                 .olm-sniffer-toggle:hover svg {
-                    stroke: rgba(0, 0, 0, 0.6);
+                    stroke: rgba(255, 255, 255, 0.6);
                 }
         
                 .olm-sniffer-toggle.active {
                     opacity: 1;
-                    border-color: rgba(0, 0, 0, 0.6);
+                    border-color: rgba(255, 255, 255, 0.6);
                 }
         
                 .olm-sniffer-toggle.active svg {
-                    stroke: rgba(0, 0, 0, 0.6);
+                    stroke: rgba(255, 255, 255, 0.6);
                 }
         
                 .olm-sniffer-panel {
@@ -1369,16 +1369,21 @@
                     right: 15px;
                     width: 280px;
                     height: 45vh;
-                    background: rgba(255, 255, 255, 0.95);
+                    min-width: 200px;
+                    min-height: 200px;
+                    max-width: 80vw;
+                    max-height: 80vh;
+                    background: rgba(26, 32, 44, 0.95);
                     backdrop-filter: blur(15px);
                     border-radius: 12px;
-                    box-shadow: 0 15px 30px rgba(0,0,0,0.1);
+                    box-shadow: 0 15px 30px rgba(0,0,0,0.3);
                     z-index: 9999;
                     display: none;
                     flex-direction: column;
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                     overflow: hidden;
-                    border: 1px solid rgba(255,255,255,0.2);
+                    border: 1px solid rgba(255,255,255,0.1);
+                    color: #e2e8f0;
                 }
         
                 .olm-sniffer-panel.visible {
@@ -1404,6 +1409,7 @@
                     display: flex;
                     justify-content: space-between;
                     align-items: center;
+                    flex-shrink: 0;
                 }
         
                 .olm-sniffer-title {
@@ -1419,10 +1425,11 @@
         
                 .olm-sniffer-tabs {
                     display: flex;
-                    background: rgba(0,0,0,0.02);
+                    background: rgba(255,255,255,0.05);
                     padding: 2px;
                     margin: 8px;
                     border-radius: 8px;
+                    flex-shrink: 0;
                 }
         
                 .olm-sniffer-tab {
@@ -1435,39 +1442,41 @@
                     transition: all 0.2s ease;
                     font-size: 10px;
                     font-weight: 500;
+                    color: #e2e8f0;
                 }
         
                 .olm-sniffer-tab.active {
-                    background: white;
+                    background: rgba(255,255,255,0.1);
                     color: #667eea;
-                    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+                    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
                 }
         
                 .olm-sniffer-content {
                     flex: 1;
                     overflow-y: auto;
                     padding: 0 8px 8px;
+                    min-height: 0;
                 }
         
                 .olm-sniffer-question {
-                    background: white;
+                    background: rgba(45, 55, 72, 0.8);
                     border-radius: 8px;
                     padding: 8px;
                     margin-bottom: 6px;
-                    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+                    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
                     border-left: 2px solid #667eea;
                     overflow: hidden;
                 }
         
                 .olm-sniffer-question-title {
                     font-weight: 600;
-                    color: #2d3748;
+                    color: #e2e8f0;
                     margin-bottom: 4px;
                     font-size: 10px;
                 }
         
                 .olm-sniffer-question-text {
-                    color: #4a5568;
+                    color: #e2e8f0;
                     font-size: 12px;
                     line-height: 1.4;
                     margin-bottom: 6px;
@@ -1475,7 +1484,7 @@
                 }
         
                 .olm-sniffer-answers {
-                    background: rgba(102, 126, 234, 0.05);
+                    background: rgba(102, 126, 234, 0.1);
                     border-radius: 4px;
                     padding: 6px;
                     overflow: hidden;
@@ -1486,7 +1495,7 @@
                     align-items: flex-start;
                     margin-bottom: 3px;
                     font-size: 12px;
-                    color: #2d3748;
+                    color: #e2e8f0;
                     line-height: 1.3;
                     overflow: hidden;
                     word-wrap: break-word;
@@ -1508,9 +1517,10 @@
         
                 .olm-sniffer-actions {
                     padding: 8px;
-                    border-top: 1px solid rgba(0,0,0,0.1);
+                    border-top: 1px solid rgba(255,255,255,0.1);
                     display: flex;
                     gap: 4px;
+                    flex-shrink: 0;
                 }
         
                 .olm-sniffer-btn {
@@ -1534,12 +1544,12 @@
                 }
         
                 .olm-sniffer-btn-secondary {
-                    background: rgba(0,0,0,0.05);
-                    color: #4a5568;
+                    background: rgba(255,255,255,0.1);
+                    color: #e2e8f0;
                 }
         
                 .olm-sniffer-btn-secondary:hover {
-                    background: rgba(0,0,0,0.1);
+                    background: rgba(255,255,255,0.2);
                 }
         
                 .olm-sniffer-empty {
@@ -1547,6 +1557,24 @@
                     padding: 20px 10px;
                     color: #a0aec0;
                     font-size: 9px;
+                }
+        
+                /* Resize handle - WHITE INDICATOR */
+                .olm-sniffer-resize-handle {
+                    position: absolute;
+                    bottom: 0;
+                    left: 0;
+                    width: 20px;
+                    height: 20px;
+                    background: linear-gradient(-45deg, transparent 0%, transparent 30%, rgba(255,255,255,0.6) 30%, rgba(255,255,255,0.6) 40%, transparent 40%, transparent 60%, rgba(255,255,255,0.6) 60%, rgba(255,255,255,0.6) 70%, transparent 70%);
+                    cursor: nw-resize;
+                    opacity: 0.8;
+                    transition: opacity 0.2s ease;
+                }
+        
+                .olm-sniffer-resize-handle:hover {
+                    opacity: 1;
+                    background: linear-gradient(-45deg, transparent 0%, transparent 30%, rgba(255,255,255,0.8) 30%, rgba(255,255,255,0.8) 40%, transparent 40%, transparent 60%, rgba(255,255,255,0.8) 60%, rgba(255,255,255,0.8) 70%, transparent 70%);
                 }
         
                 /* Image handling - SMALLER */
@@ -1594,25 +1622,60 @@
                 .olm-sniffer-content {
                     scroll-behavior: smooth;
                 }
-        
-                /* Dark mode support */
-                @media (prefers-color-scheme: dark) {
-                    .olm-sniffer-panel {
-                        background: rgba(26, 32, 44, 0.95);
-                        color: #e2e8f0;
-                    }
-        
-                    .olm-sniffer-question {
-                        background: rgba(45, 55, 72, 0.8);
-                        color: #e2e8f0;
-                    }
-        
-                    .olm-sniffer-answer {
-                        color: #e2e8f0;
-                    }
-                }
             `;
             document.head.appendChild(style);
+        },
+
+        createResizeHandle() {
+            const resizeHandle = document.createElement('div');
+            resizeHandle.className = 'olm-sniffer-resize-handle';
+            this.elements.panel.appendChild(resizeHandle);
+            this.elements.resizeHandle = resizeHandle;
+        },
+        
+        setupResizeHandling() {
+            let isResizing = false;
+            let startX, startY, startWidth, startHeight;
+        
+            const startResize = (e) => {
+                isResizing = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                startWidth = parseInt(window.getComputedStyle(this.elements.panel).width, 10);
+                startHeight = parseInt(window.getComputedStyle(this.elements.panel).height, 10);
+                
+                document.addEventListener('mousemove', doResize);
+                document.addEventListener('mouseup', stopResize);
+                e.preventDefault();
+            };
+        
+            const doResize = (e) => {
+                if (!isResizing) return;
+                
+                // FIXED: Correct the resize direction
+                const newWidth = startWidth - (e.clientX - startX);  // Subtract instead of add
+                const newHeight = startHeight + (e.clientY - startY); // Add for height (correct)
+                
+                // Apply constraints
+                const minWidth = 200;
+                const minHeight = 200;
+                const maxWidth = window.innerWidth * 0.8;
+                const maxHeight = window.innerHeight * 0.8;
+                
+                const constrainedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
+                const constrainedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
+                
+                this.elements.panel.style.width = constrainedWidth + 'px';
+                this.elements.panel.style.height = constrainedHeight + 'px';
+            };
+        
+            const stopResize = () => {
+                isResizing = false;
+                document.removeEventListener('mousemove', doResize);
+                document.removeEventListener('mouseup', stopResize);
+            };
+        
+            this.elements.resizeHandle.addEventListener('mousedown', startResize);
         },
 
         createToggleButton() {
@@ -1652,7 +1715,7 @@
         createPanel() {
             const panel = document.createElement('div');
             panel.className = 'olm-sniffer-panel';
-
+        
             panel.innerHTML = `
                 <div class="olm-sniffer-header">
                     <div>
@@ -1662,19 +1725,19 @@
                         </div>
                     </div>
                 </div>
-
+        
                 <div class="olm-sniffer-tabs">
                     <button class="olm-sniffer-tab active" data-tab="formatted">Formatted</button>
                     <button class="olm-sniffer-tab" data-tab="raw">Raw Answers</button>
                 </div>
-
+        
                 <div class="olm-sniffer-content" id="content-area">
                     <div class="olm-sniffer-empty">
                         <p>No questions captured yet</p>
                         <p style="font-size: 12px; margin-top: 8px;">Start a quiz to see answers appear here</p>
                     </div>
                 </div>
-
+        
                 <div class="olm-sniffer-actions">
                     <button class="olm-sniffer-btn olm-sniffer-btn-secondary" id="refresh-btn">
                         🔄 Refresh
@@ -1684,12 +1747,16 @@
                     </button>
                 </div>
             `;
-
+        
             this.elements.panel = panel;
             this.elements.content = panel.querySelector('#content-area');
             this.elements.questionCount = panel.querySelector('#question-count');
-
+        
             document.body.appendChild(panel);
+            
+            // Add resize handle
+            this.createResizeHandle();
+            this.setupResizeHandling();
         },
 
         setupEventListeners() {
