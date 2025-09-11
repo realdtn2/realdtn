@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OLM Answers Sniffers
 // @namespace    http://tampermonkey.net/
-// @version      2.0.2
+// @version      2.0.3
 // @description  Sniff answers from the network requests
 // @author       realdtn
 // @match        *://*.olm.vn/*
@@ -12,6 +12,99 @@
 
 (function() {
     'use strict';
+
+    const HOOK_CODE = `
+    (function() {
+      if (window.__olmHooked) return; window.__olmHooked = true;
+  
+      const isTargetUrl = (u) => {
+        try {
+          const url = new URL(u, location.href);
+          // adjust if needed:
+          return /get-question-of-ids/i.test(url.pathname) || /get-question-of-ids/i.test(url.href);
+        } catch { return false; }
+      };
+  
+      // XHR hook
+      (function() {
+        const origOpen = XMLHttpRequest.prototype.open;
+        const origSend = XMLHttpRequest.prototype.send;
+        const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+  
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+          this.__olm = { method, url, headers: {}, data: null };
+          return origOpen.call(this, method, url, ...rest);
+        };
+        XMLHttpRequest.prototype.setRequestHeader = function(h, v) {
+          if (this.__olm) this.__olm.headers[h] = v;
+          return origSetHeader.call(this, h, v);
+        };
+        XMLHttpRequest.prototype.send = function(data) {
+          if (this.__olm) this.__olm.data = data;
+          this.addEventListener('load', () => {
+            try {
+              if (this.__olm && isTargetUrl(this.__olm.url)) {
+                const text = (this.responseType && this.responseType !== 'text') ? '' : (this.responseText || '');
+                window.postMessage({ type: 'OLM_SNIF_XHR', req: this.__olm, body: text }, '*');
+              }
+            } catch {}
+          });
+          return origSend.call(this, data);
+        };
+      })();
+  
+      // fetch hook
+      (function() {
+        const origFetch = window.fetch;
+        window.fetch = function(input, init) {
+          try {
+            const method = (init && init.method) || (input && input.method) || 'GET';
+            const url = typeof input === 'string' ? input : (input && input.url) || '';
+            const headers = (init && init.headers) || (input && input.headers) || {};
+            const body = (init && init.body) || (input && input.body) || null;
+  
+            const p = origFetch(input, init);
+            if (isTargetUrl(url)) {
+              p.then(resp => {
+                try {
+                  const clone = resp.clone();
+                  clone.text().then(text => {
+                    window.postMessage({ type: 'OLM_SNIF_FETCH', req: { method, url, headers, data: body }, body: text }, '*');
+                  }).catch(()=>{});
+                } catch {}
+              }).catch(()=>{});
+            }
+            return p;
+          } catch {
+            return origFetch(input, init);
+          }
+        };
+      })();
+    })();
+    `;
+  
+    const s = document.createElement('script');
+    s.textContent = HOOK_CODE;
+    (document.head || document.documentElement).appendChild(s);
+    s.remove();
+  
+    // Listen for page->userscript messages
+    window.addEventListener('message', (ev) => {
+      const msg = ev.data;
+      if (!msg || (msg.type !== 'OLM_SNIF_XHR' && msg.type !== 'OLM_SNIF_FETCH')) return;
+  
+      // Keep your existing processing here
+      try {
+        // Save firstRequest for refresh
+        if (!state.firstRequest) state.firstRequest = msg.req;
+  
+        const responseText = msg.body || '';
+        const json = JSON.parse(responseText);
+        dataProcessor.processResponse(json);
+      } catch (e) {
+        console.warn('Failed to process intercepted response:', e);
+      }
+    }, false);
 
     // State management
     const state = {
@@ -1344,25 +1437,25 @@
                     padding: 0;
                     transition: all 0.2s ease;
                 }
-        
+
                 .olm-sniffer-toggle:hover {
                     opacity: 1;
                     border-color: rgba(255, 255, 255, 0.6);
                 }
-        
+
                 .olm-sniffer-toggle:hover svg {
                     stroke: rgba(255, 255, 255, 0.6);
                 }
-        
+
                 .olm-sniffer-toggle.active {
                     opacity: 1;
                     border-color: rgba(255, 255, 255, 0.6);
                 }
-        
+
                 .olm-sniffer-toggle.active svg {
                     stroke: rgba(255, 255, 255, 0.6);
                 }
-        
+
                 .olm-sniffer-panel {
                     position: fixed;
                     top: 60px;
@@ -1385,12 +1478,12 @@
                     border: 1px solid rgba(255,255,255,0.1);
                     color: #e2e8f0;
                 }
-        
+
                 .olm-sniffer-panel.visible {
                     display: flex;
                     animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
                 }
-        
+
                 @keyframes slideIn {
                     from {
                         opacity: 0;
@@ -1401,7 +1494,7 @@
                         transform: translateX(0);
                     }
                 }
-        
+
                 .olm-sniffer-header {
                     padding: 10px 12px;
                     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -1411,18 +1504,18 @@
                     align-items: center;
                     flex-shrink: 0;
                 }
-        
+
                 .olm-sniffer-title {
                     font-size: 12px;
                     font-weight: 600;
                     margin: 0;
                 }
-        
+
                 .olm-sniffer-stats {
                     font-size: 9px;
                     opacity: 0.9;
                 }
-        
+
                 .olm-sniffer-tabs {
                     display: flex;
                     background: rgba(255,255,255,0.05);
@@ -1431,7 +1524,7 @@
                     border-radius: 8px;
                     flex-shrink: 0;
                 }
-        
+
                 .olm-sniffer-tab {
                     flex: 1;
                     padding: 6px 8px;
@@ -1444,20 +1537,20 @@
                     font-weight: 500;
                     color: #e2e8f0;
                 }
-        
+
                 .olm-sniffer-tab.active {
                     background: rgba(255,255,255,0.1);
                     color: #667eea;
                     box-shadow: 0 1px 4px rgba(0,0,0,0.2);
                 }
-        
+
                 .olm-sniffer-content {
                     flex: 1;
                     overflow-y: auto;
                     padding: 0 8px 8px;
                     min-height: 0;
                 }
-        
+
                 .olm-sniffer-question {
                     background: rgba(45, 55, 72, 0.8);
                     border-radius: 8px;
@@ -1467,14 +1560,14 @@
                     border-left: 2px solid #667eea;
                     overflow: hidden;
                 }
-        
+
                 .olm-sniffer-question-title {
                     font-weight: 600;
                     color: #e2e8f0;
                     margin-bottom: 4px;
                     font-size: 10px;
                 }
-        
+
                 .olm-sniffer-question-text {
                     color: #e2e8f0;
                     font-size: 12px;
@@ -1482,14 +1575,14 @@
                     margin-bottom: 6px;
                     overflow: hidden;
                 }
-        
+
                 .olm-sniffer-answers {
                     background: rgba(102, 126, 234, 0.1);
                     border-radius: 4px;
                     padding: 6px;
                     overflow: hidden;
                 }
-        
+
                 .olm-sniffer-answer {
                     display: flex;
                     align-items: flex-start;
@@ -1500,11 +1593,11 @@
                     overflow: hidden;
                     word-wrap: break-word;
                 }
-        
+
                 .olm-sniffer-answer:last-child {
                     margin-bottom: 0;
                 }
-        
+
                 .olm-sniffer-answer::before {
                     content: '✓';
                     color: #48bb78;
@@ -1514,7 +1607,7 @@
                     flex-shrink: 0;
                     font-size: 10px;
                 }
-        
+
                 .olm-sniffer-actions {
                     padding: 8px;
                     border-top: 1px solid rgba(255,255,255,0.1);
@@ -1522,7 +1615,7 @@
                     gap: 4px;
                     flex-shrink: 0;
                 }
-        
+
                 .olm-sniffer-btn {
                     flex: 1;
                     padding: 6px 8px;
@@ -1533,32 +1626,32 @@
                     font-weight: 500;
                     transition: all 0.2s ease;
                 }
-        
+
                 .olm-sniffer-btn-primary {
                     background: #667eea;
                     color: white;
                 }
-        
+
                 .olm-sniffer-btn-primary:hover {
                     background: #5a67d8;
                 }
-        
+
                 .olm-sniffer-btn-secondary {
                     background: rgba(255,255,255,0.1);
                     color: #e2e8f0;
                 }
-        
+
                 .olm-sniffer-btn-secondary:hover {
                     background: rgba(255,255,255,0.2);
                 }
-        
+
                 .olm-sniffer-empty {
                     text-align: center;
                     padding: 20px 10px;
                     color: #a0aec0;
                     font-size: 9px;
                 }
-        
+
                 /* Resize handle - MOBILE FRIENDLY */
                 .olm-sniffer-resize-handle {
                     position: absolute;
@@ -1578,12 +1671,12 @@
                     -ms-user-select: none;
                     user-select: none;
                 }
-        
+
                 .olm-sniffer-resize-handle:hover {
                     opacity: 1;
                     background: linear-gradient(-45deg, transparent 0%, transparent 30%, rgba(255,255,255,0.8) 30%, rgba(255,255,255,0.8) 40%, transparent 40%, transparent 60%, rgba(255,255,255,0.8) 60%, rgba(255,255,255,0.8) 70%, transparent 70%);
                 }
-        
+
                 /* Mobile-specific styles */
                 @media (max-width: 768px) {
                     .olm-sniffer-resize-handle {
@@ -1591,7 +1684,7 @@
                         height: 40px;
                         opacity: 0.9;
                     }
-                    
+
                     .olm-sniffer-panel {
                         width: 90vw;
                         height: 50vh;
@@ -1599,7 +1692,7 @@
                         top: 50px;
                     }
                 }
-        
+
                 /* Image handling - SMALLER */
                 .olm-sniffer-answer img {
                     max-width: 100% !important;
@@ -1611,7 +1704,7 @@
                     display: block;
                     object-fit: contain;
                 }
-        
+
                 .olm-sniffer-question-text img {
                     max-width: 100% !important;
                     width: auto !important;
@@ -1622,16 +1715,16 @@
                     display: block;
                     object-fit: contain;
                 }
-        
+
                 /* MathJax styling */
                 .olm-sniffer-answer .MathJax {
                     font-size: 12px !important;
                 }
-        
+
                 .olm-sniffer-answer .MathJax_Display {
                     font-size: 13px !important;
                 }
-        
+
                 /* Highlight effect for active answer */
                 .olm-sniffer-question.highlighted {
                     border-left-color: #48bb78 !important;
@@ -1640,7 +1733,7 @@
                     transition: all 0.3s ease;
                     box-shadow: 0 2px 8px rgba(72, 187, 120, 0.2) !important;
                 }
-        
+
                 /* Smooth scrolling for the content area */
                 .olm-sniffer-content {
                     scroll-behavior: smooth;
@@ -1655,14 +1748,14 @@
             this.elements.panel.appendChild(resizeHandle);
             this.elements.resizeHandle = resizeHandle;
         },
-        
+
         setupResizeHandling() {
             let isResizing = false;
             let startX, startY, startWidth, startHeight;
-        
+
             const startResize = (e) => {
                 isResizing = true;
-                
+
                 // Handle both mouse and touch events
                 if (e.type === 'touchstart') {
                     e.preventDefault();
@@ -1672,24 +1765,24 @@
                     startX = e.clientX;
                     startY = e.clientY;
                 }
-                
+
                 startWidth = parseInt(window.getComputedStyle(this.elements.panel).width, 10);
                 startHeight = parseInt(window.getComputedStyle(this.elements.panel).height, 10);
-                
+
                 // Add both mouse and touch event listeners
                 document.addEventListener('mousemove', doResize);
                 document.addEventListener('mouseup', stopResize);
                 document.addEventListener('touchmove', doResize, { passive: false });
                 document.addEventListener('touchend', stopResize);
-                
+
                 e.preventDefault();
             };
-        
+
             const doResize = (e) => {
                 if (!isResizing) return;
-                
+
                 let clientX, clientY;
-                
+
                 // Handle both mouse and touch events
                 if (e.type === 'touchmove') {
                     e.preventDefault();
@@ -1699,24 +1792,24 @@
                     clientX = e.clientX;
                     clientY = e.clientY;
                 }
-                
+
                 // FIXED: Correct the resize direction
                 const newWidth = startWidth - (clientX - startX);  // Subtract instead of add
                 const newHeight = startHeight + (clientY - startY); // Add for height (correct)
-                
+
                 // Apply constraints
                 const minWidth = 200;
                 const minHeight = 200;
                 const maxWidth = window.innerWidth * 0.8;
                 const maxHeight = window.innerHeight * 0.8;
-                
+
                 const constrainedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
                 const constrainedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
-                
+
                 this.elements.panel.style.width = constrainedWidth + 'px';
                 this.elements.panel.style.height = constrainedHeight + 'px';
             };
-        
+
             const stopResize = () => {
                 isResizing = false;
                 document.removeEventListener('mousemove', doResize);
@@ -1724,7 +1817,7 @@
                 document.removeEventListener('touchmove', doResize);
                 document.removeEventListener('touchend', stopResize);
             };
-        
+
             // Add both mouse and touch event listeners
             this.elements.resizeHandle.addEventListener('mousedown', startResize);
             this.elements.resizeHandle.addEventListener('touchstart', startResize, { passive: false });
@@ -1767,7 +1860,7 @@
         createPanel() {
             const panel = document.createElement('div');
             panel.className = 'olm-sniffer-panel';
-        
+
             panel.innerHTML = `
                 <div class="olm-sniffer-header">
                     <div>
@@ -1777,19 +1870,19 @@
                         </div>
                     </div>
                 </div>
-        
+
                 <div class="olm-sniffer-tabs">
                     <button class="olm-sniffer-tab active" data-tab="formatted">Formatted</button>
                     <button class="olm-sniffer-tab" data-tab="raw">Raw Answers</button>
                 </div>
-        
+
                 <div class="olm-sniffer-content" id="content-area">
                     <div class="olm-sniffer-empty">
                         <p>No questions captured yet</p>
                         <p style="font-size: 12px; margin-top: 8px;">Start a quiz to see answers appear here</p>
                     </div>
                 </div>
-        
+
                 <div class="olm-sniffer-actions">
                     <button class="olm-sniffer-btn olm-sniffer-btn-secondary" id="refresh-btn">
                         🔄 Refresh
@@ -1799,13 +1892,13 @@
                     </button>
                 </div>
             `;
-        
+
             this.elements.panel = panel;
             this.elements.content = panel.querySelector('#content-area');
             this.elements.questionCount = panel.querySelector('#question-count');
-        
+
             document.body.appendChild(panel);
-            
+
             // Add resize handle
             this.createResizeHandle();
             this.setupResizeHandling();
