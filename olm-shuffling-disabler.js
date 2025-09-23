@@ -4,8 +4,10 @@
 // @version      1.0
 // @description  Disable question shuffling by overriding _shuffle function
 // @author       realdtn
-// @match        https://olm.vn/*
+// @match        *://*.olm.vn/*
 // @grant        none
+// @updateURL    https://raw.githubusercontent.com/realdtn2/realdtn/refs/heads/main/olm-shuffling-disabler.js
+// @downloadURL  https://raw.githubusercontent.com/realdtn2/realdtn/refs/heads/main/olm-shuffling-disabler.js
 // ==/UserScript==
 
 (function() {
