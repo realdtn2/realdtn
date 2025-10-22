@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         OLM Answers Sniffer
 // @namespace    http://tampermonkey.net/
-// @version      3.0.0
-// @description  v3 - Revamped OLM sniffer that sniffs answers from the network requests, extract, decode, organise, and display the answers.
+// @version      3.1.0
+// @description  v3.1 - Revamped OLM sniffer with click-to-find feature for matching answers on page
 // @author       realdtn
 // @match        *://*.olm.vn/*
 // @grant        none
@@ -14,7 +14,7 @@
 
     const HOOK_CODE = `(() => {
       if (window.__olmHooked) return; window.__olmHooked = true;
-  
+
       const tryParseJSON = (text) => { try { return JSON.parse(text); } catch { return null; } };
       const looksLikeBase64 = (s) => typeof s === 'string' && s.length > 16 && /^[A-Za-z0-9+/=]+$/.test(s);
       const collectContents = (obj, out) => {
@@ -35,7 +35,7 @@
           window.postMessage({ type: 'OLM_SNIF_CONTENTS', meta, contents }, '*');
         }
       };
-  
+
       // XHR hook
       (() => {
         const origOpen = XMLHttpRequest.prototype.open;
@@ -58,7 +58,7 @@
           return origSend.call(this, body);
         };
       })();
-  
+
       // fetch hook
       (() => {
         const origFetch = window.fetch;
@@ -74,7 +74,7 @@
         };
       })();
     })();`;
-  
+
     const inject = () => {
     const s = document.createElement('script');
     s.textContent = HOOK_CODE;
@@ -132,6 +132,112 @@
             try { return decodeURIComponent(escape(atob(base64))); } catch { return null; }
         }
     };
+
+    // Fuzzy matching utilities
+    const fuzzyMatch = {
+        // Normalize text for comparison
+        normalize(text) {
+            return text.toLowerCase()
+                .replace(/\s+/g, ' ')
+                .replace(/[^\w\s]/g, '')
+                .trim();
+        },
+
+        // Calculate similarity score between two strings (0-1)
+        similarity(s1, s2) {
+            const n1 = this.normalize(s1);
+            const n2 = this.normalize(s2);
+            if (n1 === n2) return 1;
+            if (!n1 || !n2) return 0;
+
+            // Use Levenshtein-like approach but optimized
+            const len1 = n1.length;
+            const len2 = n2.length;
+            const maxLen = Math.max(len1, len2);
+
+            // Check if one contains the other
+            if (n1.includes(n2) || n2.includes(n1)) {
+                return 0.8 + (0.2 * Math.min(len1, len2) / maxLen);
+            }
+
+            // Simple character overlap score
+            const chars1 = new Set(n1.split(''));
+            const chars2 = new Set(n2.split(''));
+            const intersection = new Set([...chars1].filter(x => chars2.has(x)));
+            const union = new Set([...chars1, ...chars2]);
+
+            return intersection.size / union.size;
+        },
+
+        // Find best matching element on page
+        findBestMatch(searchText) {
+            const candidates = [];
+            const minLength = 3;
+
+            // Get all text nodes and their parent elements
+            const walker = document.createTreeWalker(
+                document.body,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode: (node) => {
+                        const text = node.textContent.trim();
+                        if (text.length < minLength) return NodeFilter.FILTER_REJECT;
+                        const parent = node.parentElement;
+                        // Skip if inside OLM UI elements
+                        if (!parent || parent.closest('.olm-mini-panel, .olm-sniffer-toggle')) return NodeFilter.FILTER_REJECT;
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                }
+            );
+
+            let node;
+            while (node = walker.nextNode()) {
+                const text = node.textContent.trim();
+                const parent = node.parentElement;
+                if (parent) {
+                    candidates.push({ element: parent, text });
+                }
+            }
+
+            // Score all candidates
+            let bestMatch = null;
+            let bestScore = 0;
+
+            for (const candidate of candidates) {
+                const score = this.similarity(searchText, candidate.text);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = candidate.element;
+                }
+            }
+
+            // Only return if score is decent
+            return bestScore > 0.3 ? bestMatch : null;
+        }
+    };
+
+    // Scroll and highlight element
+    function scrollToElement(element) {
+        if (!element) return false;
+
+        // Remove previous highlights
+        document.querySelectorAll('.olm-highlight').forEach(el => {
+            el.classList.remove('olm-highlight');
+        });
+
+        // Add highlight
+        element.classList.add('olm-highlight');
+
+        // Scroll into view
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        // Remove highlight after 3 seconds
+        setTimeout(() => {
+            element.classList.remove('olm-highlight');
+        }, 3000);
+
+        return true;
+    }
 
     // Process HTML snippets: split by .exp markers (as end of a question),
     // then remove .exp blocks, beautify each segment, and append to state
@@ -219,21 +325,17 @@
                   padding: 0;
                   transition: all 0.2s ease;
               }
-
               .olm-sniffer-toggle:hover {
                   opacity: 0.8;
                   border-color: rgba(0, 0, 0, 0.4);
               }
-
               .olm-sniffer-toggle:hover svg {
                   stroke: rgba(0, 0, 0, 0.4);
               }
-
               .olm-sniffer-toggle.active {
                   opacity: 0.8;
                   border-color: rgba(0, 0, 0, 0.4);
               }
-
               .olm-sniffer-toggle.active svg {
                   stroke: rgba(0, 0, 0, 0.4);
               }
@@ -246,17 +348,14 @@
               .olm-mini-body{overflow:auto;padding:8px;background:#1520}
               .olm-item{background:#2634;border-left:2px solid #6af;padding:6px;border-radius:6px;margin:6px 0}
               .olm-item img{max-width:100%;height:auto;max-height:100px}
-              /* Resize handle (bottom-left) */
+              .olm-item li.correctAnswer{color:#48bb78;font-weight:600}
+              .olm-item .fill-answer{color:#48bb78;font-weight:600}
+              .olm-item [dir="ltr"]{cursor:pointer;transition:background 0.2s;padding:2px;border-radius:3px}
+              .olm-item [dir="ltr"]:hover{background:#3745}
               .olm-mini-resize{position:absolute;bottom:0;left:0;width:28px;height:28px;cursor:nesw-resize;opacity:.7;touch-action:none;-webkit-user-select:none;user-select:none;background:linear-gradient(135deg,transparent 60%, rgba(255,255,255,.35) 60%, rgba(255,255,255,.35) 65%, transparent 65%)}
               .olm-mini-resize:active{opacity:1}
-              /* Tighten spacing for answer lists */
               .olm-item ol.quiz-list{margin:0 0 6px 20px;padding:0}
               .olm-item ol.quiz-list li{margin:0;padding:0}
-              /* Highlight correct answers */
-              .olm-item li.correctAnswer{color:#48bb78;font-weight:600}
-              /* Fill-in answers from data-accept */
-              .olm-item .fill-answer{color:#48bb78;font-weight:600}
-              /* Subtle black text outline/glow for readability */
               .olm-mini-panel, .olm-mini-panel *{
                 text-shadow:
                   0 0 1px rgba(0,0,0,.55),
@@ -264,6 +363,12 @@
                   0 -1px 0 rgba(0,0,0,.35),
                   1px 0 0 rgba(0,0,0,.35),
                   -1px 0 0 rgba(0,0,0,.35);
+              }
+              .olm-highlight {
+                background-color: rgba(255, 255, 0, 0.3) !important;
+                outline: 2px solid #ffd700 !important;
+                outline-offset: 2px;
+                transition: all 0.3s ease;
               }
             `;
             document.head.appendChild(style);
@@ -289,15 +394,14 @@
                   <button class="olm-mini-btn" id="olm-dl">Download</button>
                   <button class="olm-mini-btn" id="olm-copy-orig">Copy Original</button>
                   <button class="olm-mini-btn" id="olm-dl-orig">Download Original</button>
-                        </div>
-                    </div>
+                </div>
+              </div>
               <div class="olm-mini-body" id="olm-body"><div>No data yet. Start a quiz.</div></div>
             `;
 
             document.body.appendChild(btn);
             document.body.appendChild(panel);
 
-            // Add resize handle (bottom-left)
             const resize = document.createElement('div');
             resize.className = 'olm-mini-resize';
             panel.appendChild(resize);
@@ -305,8 +409,7 @@
             btn.onclick = () => { state.isVisible = !state.isVisible; panel.classList.toggle('visible', state.isVisible); btn.classList.toggle('active', state.isVisible); if (state.isVisible) this.update(); };
 
             this.el = {
-                btn,
-                panel,
+                btn, panel,
                 body: panel.querySelector('#olm-body'),
                 count: panel.querySelector('#olm-count'),
                 copy: panel.querySelector('#olm-copy'),
@@ -327,11 +430,10 @@
                 const prettyItems = state.items.map(html => beautify(html, options));
                 const content = prettyItems.join('\n\n<!-- ---- separator ---- -->\n\n');
                 const blob = new Blob([content], { type: 'text/html' });
-            const url = URL.createObjectURL(blob);
+                const url = URL.createObjectURL(blob);
                 const a = document.createElement('a'); a.href = url; a.download = `olm-answers-${Date.now()}.html`;
                 document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
             };
-
             this.el.copyOrig.onclick = async () => {
                 await ensureBeautifier();
                 const beautify = window.html_beautify || ((s)=>s);
@@ -350,7 +452,33 @@
                 document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
             };
 
-            // Resizing logic (bottom-left handle), mouse + touch
+            // Handle clicks on elements with dir="ltr" to find and scroll to matches
+            this.el.body.addEventListener('click', (e) => {
+                // Check if clicked element has dir="ltr" or is inside one
+                const ltrEl = e.target.closest('[dir="ltr"]');
+                if (!ltrEl) return;
+
+                // Make sure it's inside an olm-item
+                const itemEl = ltrEl.closest('.olm-item');
+                if (!itemEl) return;
+
+                e.stopPropagation();
+
+                // Use the text from the clicked dir="ltr" element as search text
+                const searchText = ltrEl.textContent.trim();
+                if (!searchText) return;
+
+                const matchEl = fuzzyMatch.findBestMatch(searchText);
+                if (matchEl) {
+                    scrollToElement(matchEl);
+                } else {
+                    // Flash the clicked element to indicate no match found
+                    const origBg = ltrEl.style.backgroundColor;
+                    ltrEl.style.backgroundColor = 'rgba(255, 136, 136, 0.3)';
+                    setTimeout(() => { ltrEl.style.backgroundColor = origBg; }, 300);
+                }
+            });
+
             (function setupResize(panelEl, handle){
                 let isResizing = false; let startX = 0; let startY = 0; let startW = 0; let startH = 0;
                 const minW = 220; const minH = 180; const maxW = Math.round(window.innerWidth * 0.9); const maxH = Math.round(window.innerHeight * 0.9);
@@ -362,7 +490,6 @@
                 const onMove = (e) => { if (!isResizing) return; e.preventDefault(); const cx = e.clientX; const cy = e.clientY; applyResize(cx, cy); };
                 const onTouchMove = (e) => { if (!isResizing) return; e.preventDefault(); const t = e.touches[0]; applyResize(t.clientX, t.clientY); };
                 const applyResize = (cx, cy) => {
-                    // bottom-left: width increases as cursor moves left (startX - cx), height increases as cursor moves down (cy - startY)
                     const newW = Math.max(minW, Math.min(maxW, startW + (startX - cx)));
                     const newH = Math.max(minH, Math.min(maxH, startH + (cy - startY)));
                     panelEl.style.width = newW + 'px';
@@ -380,7 +507,6 @@
             const renderSegment = (html) => {
                 const tmp = document.createElement('div');
                 tmp.innerHTML = html;
-                // If there is no li.correctAnswer, use input[data-accept] as answers
                 if (!tmp.querySelector('li.correctAnswer')) {
                     tmp.querySelectorAll('input[data-accept]').forEach(inp => {
                         const v = inp.getAttribute('data-accept') || '';
@@ -393,7 +519,6 @@
                 return tmp.innerHTML;
             };
             this.el.body.innerHTML = state.items.map((html, i) => `<div class=\"olm-item\"><div style=\"opacity:.7;margin-bottom:4px\">Item ${i+1}</div>${renderSegment(html)}</div>`).join('');
-            // Math typesetting for math and chemistry
             ensureMathJax().then(() => {
                 try { window.MathJax.typesetPromise && window.MathJax.typesetPromise([this.el.body]); } catch {}
             });
