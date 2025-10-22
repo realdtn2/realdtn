@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Data Submitter
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @description  Submit course data with custom scores and auto time/question detection
 // @author       You
 // @match        https://olm.vn/*
@@ -733,6 +733,59 @@
             display: none;
         `;
 
+        // Delete button
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = '🗑️ Xóa Bài Làm';
+        deleteBtn.style.cssText = `
+            background: rgba(255,0,0,0.3);
+            border: none;
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            margin-top: 10px;
+            transition: background 0.3s;
+        `;
+        deleteBtn.onmouseover = () => deleteBtn.style.background = 'rgba(255,0,0,0.5)';
+        deleteBtn.onmouseout = () => deleteBtn.style.background = 'rgba(255,0,0,0.3)';
+        deleteBtn.onclick = async () => {
+            // Show confirmation dialog
+            const confirmed = confirm('Bạn có chắc chắn muốn xóa bài làm hiện tại? Hành động này không thể hoàn tác.');
+            if (!confirmed) return;
+
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = 'Đang xóa...';
+            statusMsg.textContent = '🗑️ Đang xóa bài làm...';
+            statusMsg.style.display = 'block';
+            statusMsg.style.background = 'rgba(255,255,255,0.2)';
+
+            const result = await deleteWork();
+
+            if (result.success) {
+                statusMsg.textContent = '✓ Xóa bài làm thành công!';
+                statusMsg.style.background = 'rgba(0,255,0,0.3)';
+
+                // Clear form inputs
+                Object.values(inputs).forEach(input => {
+                    input.value = '';
+                });
+
+                // Reset to default values
+                inputs.score.value = 100;
+                inputs.count_problems.value = detectedTotalQuestions || 0;
+                inputs.correct.value = detectedTotalQuestions || 0;
+                inputs.time_watched.value = detectedTotalTime || 0;
+            } else {
+                statusMsg.textContent = '❌ Lỗi xóa: ' + (result.error || result.status);
+                statusMsg.style.background = 'rgba(255,0,0,0.3)';
+            }
+
+            deleteBtn.disabled = false;
+            deleteBtn.textContent = '🗑️ Xóa Bài Làm';
+        };
+
         // Submit button
         const submitBtn = document.createElement('button');
         submitBtn.textContent = 'Gửi Dữ Liệu';
@@ -801,6 +854,7 @@
         container.appendChild(tabNav);
         container.appendChild(videoContent);
         container.appendChild(statusMsg);
+        container.appendChild(deleteBtn);
         container.appendChild(submitBtn);
 
         // Toggle functionality
