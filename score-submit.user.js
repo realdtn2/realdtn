@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Data Submitter (iOS Compatible)
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  Submit course data with custom scores and auto time/question detection - iOS Safari compatible
 // @author       You
 // @match        https://olm.vn/*
@@ -27,167 +27,66 @@
     let autoQuestionDetected = false;
     let detectedTotalQuestions = null;
 
-    // Lightweight ZIP parser for iOS compatibility (no external dependencies)
-    class LightweightZip {
-        constructor() {
-            this.files = new Map();
+    // Use JSZip for proper DOCX parsing (same as OLM Docx Viewer)
+    async function parseDocxWithJSZip(arrayBuffer) {
+        console.log('Parsing DOCX with JSZip...');
+        
+        try {
+            // Load JSZip if not already loaded
+            if (typeof JSZip === 'undefined') {
+                console.log('Loading JSZip library...');
+                await loadJSZip();
+            }
+            
+            const zip = new JSZip();
+            const docx = await zip.loadAsync(arrayBuffer);
+            
+            console.log('DOCX loaded, files:', Object.keys(docx.files));
+            
+            // Extract document.xml
+            const documentFile = docx.file('word/document.xml');
+            if (!documentFile) {
+                console.log('Available files in DOCX:', Object.keys(docx.files));
+                throw new Error('No document.xml found in DOCX file');
+            }
+            
+            const documentXml = await documentFile.async('text');
+            console.log('Document XML length:', documentXml.length);
+            
+            return documentXml;
+            
+        } catch (error) {
+            console.error('Error parsing DOCX with JSZip:', error);
+            throw error;
         }
-
-        async loadAsync(arrayBuffer) {
-            try {
-                const dataView = new DataView(arrayBuffer);
-                let offset = 0;
-
-                // Validate minimum ZIP file size
-                if (arrayBuffer.byteLength < 22) {
-                    throw new Error('File too small to be a valid ZIP');
-                }
-
-                // Find end of central directory
-                let eocdOffset = -1;
-                for (let i = dataView.byteLength - 22; i >= 0; i--) {
-                    if (dataView.getUint32(i, true) === 0x06054b50) {
-                        eocdOffset = i;
-                        break;
-                    }
-                }
-
-                if (eocdOffset === -1) {
-                    throw new Error('Invalid ZIP file - no end of central directory found');
-                }
-
-            // Read end of central directory
-            const eocd = {
-                signature: dataView.getUint32(eocdOffset, true),
-                diskNumber: dataView.getUint16(eocdOffset + 4, true),
-                centralDirDisk: dataView.getUint16(eocdOffset + 6, true),
-                centralDirRecords: dataView.getUint16(eocdOffset + 8, true),
-                centralDirSize: dataView.getUint32(eocdOffset + 12, true),
-                centralDirOffset: dataView.getUint32(eocdOffset + 16, true),
-                commentLength: dataView.getUint16(eocdOffset + 20, true)
+    }
+    
+    // Load JSZip library dynamically
+    function loadJSZip() {
+        return new Promise((resolve, reject) => {
+            if (typeof JSZip !== 'undefined') {
+                resolve();
+                return;
+            }
+            
+            const script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+            script.onload = () => {
+                console.log('JSZip loaded successfully');
+                resolve();
             };
-
-            // Read central directory
-            offset = eocd.centralDirOffset;
-            for (let i = 0; i < eocd.centralDirRecords; i++) {
-                const signature = dataView.getUint32(offset, true);
-                if (signature !== 0x02014b50) break;
-
-                const file = {
-                    signature: signature,
-                    version: dataView.getUint16(offset + 4, true),
-                    flags: dataView.getUint16(offset + 6, true),
-                    compression: dataView.getUint16(offset + 8, true),
-                    modTime: dataView.getUint16(offset + 10, true),
-                    modDate: dataView.getUint16(offset + 12, true),
-                    crc32: dataView.getUint32(offset + 14, true),
-                    compressedSize: dataView.getUint32(offset + 18, true),
-                    uncompressedSize: dataView.getUint32(offset + 22, true),
-                    fileNameLength: dataView.getUint16(offset + 26, true),
-                    extraFieldLength: dataView.getUint16(offset + 28, true),
-                    commentLength: dataView.getUint16(offset + 30, true),
-                    diskNumber: dataView.getUint16(offset + 32, true),
-                    internalAttrs: dataView.getUint16(offset + 34, true),
-                    externalAttrs: dataView.getUint32(offset + 36, true),
-                    localHeaderOffset: dataView.getUint32(offset + 40, true)
-                };
-
-                offset += 46;
-
-                // Read filename
-                const fileName = new TextDecoder('utf-8').decode(
-                    arrayBuffer.slice(offset, offset + file.fileNameLength)
-                );
-                offset += file.fileNameLength + file.extraFieldLength + file.commentLength;
-
-                // Store file info
-                this.files.set(fileName, file);
-            }
-
-            return this;
-            } catch (error) {
-                console.error('Error loading ZIP file:', error);
-                throw new Error(`Failed to load ZIP file: ${error.message}`);
-            }
-        }
-
-        file(fileName) {
-            const fileInfo = this.files.get(fileName);
-            if (!fileInfo) return null;
-
-            return {
-                async: async (type) => {
-                    if (type !== 'text') {
-                        throw new Error('Only text type supported');
-                    }
-
-                    // Read local file header
-                    const dataView = new DataView(arrayBuffer);
-                    let offset = fileInfo.localHeaderOffset;
-
-                    const localHeader = {
-                        signature: dataView.getUint32(offset, true),
-                        version: dataView.getUint16(offset + 4, true),
-                        flags: dataView.getUint16(offset + 6, true),
-                        compression: dataView.getUint16(offset + 8, true),
-                        modTime: dataView.getUint16(offset + 10, true),
-                        modDate: dataView.getUint16(offset + 12, true),
-                        crc32: dataView.getUint32(offset + 14, true),
-                        compressedSize: dataView.getUint32(offset + 18, true),
-                        uncompressedSize: dataView.getUint32(offset + 22, true),
-                        fileNameLength: dataView.getUint16(offset + 26, true),
-                        extraFieldLength: dataView.getUint16(offset + 28, true)
-                    };
-
-                    offset += 30 + localHeader.fileNameLength + localHeader.extraFieldLength;
-
-                    // Get file data
-                    const fileData = arrayBuffer.slice(offset, offset + fileInfo.compressedSize);
-
-                    // Decompress if needed (only support stored/uncompressed for simplicity)
-                    if (fileInfo.compression === 0) {
-                        // Stored (uncompressed)
-                        return new TextDecoder('utf-8').decode(fileData);
-                    } else {
-                        // For compressed files, we'll try to read as text anyway
-                        // This is a simplified approach - in production you'd want proper decompression
-                        try {
-                            return new TextDecoder('utf-8').decode(fileData);
-                        } catch (e) {
-                            console.warn('Could not decode compressed file, trying raw text extraction');
-                            // Fallback: try to extract readable text from the compressed data
-                            return this.extractTextFromCompressedData(fileData);
-                        }
-                    }
-                }
+            script.onerror = () => {
+                reject(new Error('Failed to load JSZip library'));
             };
-        }
-
-        extractTextFromCompressedData(data) {
-            // Simple text extraction from binary data
-            // This is a fallback method for when proper decompression isn't available
-            const uint8Array = new Uint8Array(data);
-            let text = '';
-
-            for (let i = 0; i < uint8Array.length; i++) {
-                const byte = uint8Array[i];
-                // Look for printable ASCII characters and common UTF-8 patterns
-                if ((byte >= 32 && byte <= 126) || byte === 10 || byte === 13) {
-                    text += String.fromCharCode(byte);
-                } else if (byte === 0) {
-                    text += ' '; // Replace null bytes with spaces
-                }
-            }
-
-            return text;
-        }
+            document.head.appendChild(script);
+        });
     }
 
     // Monitor network requests for teacher-static (iOS compatible)
     function monitorNetworkRequests() {
         // iOS Safari extensions have limited access to network interception
         // We'll use a more compatible approach with event listeners
-
+        
         // Try to intercept fetch requests
         if (typeof window.fetch !== 'undefined') {
             const originalFetch = window.fetch;
@@ -334,7 +233,7 @@
             const url = `https://olm.vn/download-word-for-user?id_cate=${idCategory}&showAns=1&questionNotApproved=0`;
 
             console.log('Fetching DOCX file to extract questions...');
-
+            
             // iOS Safari compatible fetch with proper error handling
             const response = await fetch(url, {
                 method: 'GET',
@@ -372,22 +271,14 @@
             const arrayBuffer = await docxResponse.arrayBuffer();
             console.log('DOCX file size:', arrayBuffer.byteLength, 'bytes');
 
-            // Parse DOCX with our lightweight ZIP parser
-            const zip = new LightweightZip();
-            const docx = await zip.loadAsync(arrayBuffer);
-
-            // Extract document.xml
-            const documentFile = docx.file('word/document.xml');
-            if (!documentFile) {
-                throw new Error('No document.xml found in DOCX file');
-            }
-
-            const documentXml = await documentFile.async('text');
-            console.log('Document XML length:', documentXml.length);
+            // Parse DOCX with JSZip (same as OLM Docx Viewer)
+            const documentXml = await parseDocxWithJSZip(arrayBuffer);
 
             // Extract all text content from the document
             const textContent = extractTextFromDocx(documentXml);
             console.log('Extracted text content length:', textContent.length);
+            console.log('First 500 characters of extracted text:', textContent.substring(0, 500));
+            console.log('Last 500 characters of extracted text:', textContent.substring(Math.max(0, textContent.length - 500)));
 
             // Find the last question number by reading backwards
             const totalQuestions = findLastQuestionNumber(textContent);
@@ -397,52 +288,10 @@
 
         } catch (error) {
             console.error('Error extracting questions from DOCX:', error);
-
-            // Fallback: try to extract questions from page content
-            console.log('Attempting fallback question detection from page content...');
-            return extractQuestionsFromPageContent();
+            throw error;
         }
     }
 
-    // Fallback method to extract questions from page content
-    function extractQuestionsFromPageContent() {
-        try {
-            // Look for question patterns in the current page
-            const pageText = document.body.textContent || document.body.innerText || '';
-
-            // Find all question numbers
-            const questionRegex = /(?:Question|Câu|Bài|Câu hỏi|Bài tập)\s*(\d+)/gi;
-            const matches = [];
-            let match;
-
-            while ((match = questionRegex.exec(pageText)) !== null) {
-                const num = parseInt(match[1]);
-                if (!isNaN(num)) {
-                    matches.push(num);
-                }
-            }
-
-            if (matches.length > 0) {
-                const maxQuestion = Math.max(...matches);
-                console.log(`Fallback: Found ${matches.length} question numbers, highest is: ${maxQuestion}`);
-                    return maxQuestion;
-            }
-
-            // Alternative: look for numbered lists or question indicators
-            const numberedItems = pageText.match(/\d+\.\s/g);
-            if (numberedItems && numberedItems.length > 0) {
-                console.log(`Fallback: Found ${numberedItems.length} numbered items`);
-                return numberedItems.length;
-            }
-
-            console.log('Fallback: No questions found in page content');
-            return null;
-
-        } catch (error) {
-            console.error('Error in fallback question detection:', error);
-            return null;
-        }
-    }
 
     // Function to extract text content from DOCX XML
     function extractTextFromDocx(xmlContent) {
@@ -465,68 +314,56 @@
 
     // Function to find the last question number by reading backwards
     function findLastQuestionNumber(textContent) {
-        console.log('Searching for last question in text...');
+        console.log('Searching for last question in text from END to START...');
 
-        // Split text into words and reverse to read from end
-        const words = textContent.split(/\s+/).filter(word => word.trim());
-
-        // Read backwards to find the last question pattern
-        for (let i = words.length - 1; i >= 0; i--) {
-            const word = words[i];
-
-            // Look for patterns like "Question 8.", "Câu 8.", "Bài 8.", etc.
-            const questionMatch = word.match(/(?:Question|Câu|Bài|Câu hỏi|Bài tập)\s*(\d+)/i);
-            if (questionMatch) {
-                const questionNum = parseInt(questionMatch[1]);
-                console.log(`Found question pattern: "${word}" -> number: ${questionNum}`);
-                return questionNum;
-            }
-
-            // Also look for standalone numbers that might be question numbers
-            // Check if this could be a question number followed by punctuation
-            if (i > 0) {
-                const currentWord = words[i].replace(/[.,;:!?]/g, '');
-                const prevWord = words[i-1];
-
-                // Check if previous word indicates this is a question number
-                if (/^\d+$/.test(currentWord) &&
-                    /(?:Question|Câu|Bài|Câu hỏi|Bài tập)/i.test(prevWord)) {
-                    const questionNum = parseInt(currentWord);
-                    console.log(`Found question pattern: "${prevWord} ${currentWord}" -> number: ${questionNum}`);
-                    return questionNum;
-                }
-            }
-
-            // Look for Vietnamese question patterns
-            const vietnameseMatch = word.match(/(?:câu|bài)\s*(\d+)/i);
-            if (vietnameseMatch) {
-                const questionNum = parseInt(vietnameseMatch[1]);
-                console.log(`Found Vietnamese question pattern: "${word}" -> number: ${questionNum}`);
-                return questionNum;
-            }
-        }
-
-        // Alternative method: look for all question numbers and take the highest
-        const allQuestionNumbers = [];
-        const questionRegex = /(?:Question|Câu|Bài|Câu hỏi|Bài tập)\s*(\d+)/gi;
-        let match;
-
-        while ((match = questionRegex.exec(textContent)) !== null) {
-            const num = parseInt(match[1]);
-            if (!isNaN(num)) {
-                allQuestionNumbers.push(num);
-            }
-        }
-
-        if (allQuestionNumbers.length > 0) {
-            const maxQuestion = Math.max(...allQuestionNumbers);
-            console.log(`Found ${allQuestionNumbers.length} question numbers, highest is: ${maxQuestion}`);
-            return maxQuestion;
-        }
-
-        console.log('No question pattern found in document');
-        return null;
+        // Search from the END of the document backwards to the START
+        // and take the number of the very first question found
+        return findFirstQuestionFromEnd(textContent);
     }
+
+    // Function to search from END to START and find the first question
+    function findFirstQuestionFromEnd(textContent) {
+        console.log('Searching from end of document to start...');
+        console.log('Document length:', textContent.length);
+        
+        // ACTUALLY READ FROM THE END - search backwards through the entire document
+        const questionRegex = /(?:Câu|Question|Câu hỏi)\s+(\d+)[\s\.:]/gi;
+        const matches = [];
+        let match;
+        
+        // Find ALL matches in the ENTIRE document
+        while ((match = questionRegex.exec(textContent)) !== null) {
+            const matchData = {
+                number: parseInt(match[1]),
+                index: match.index,
+                text: match[0],
+                context: textContent.substring(Math.max(0, match.index - 20), match.index + match[0].length + 20)
+            };
+            matches.push(matchData);
+            console.log(`Found match: "${match[0]}" -> number: ${matchData.number} at position ${match.index}`);
+            console.log(`Context: "${matchData.context}"`);
+        }
+        
+        console.log(`Found ${matches.length} question matches in entire document:`, matches);
+        
+        if (matches.length === 0) {
+            console.log('No question patterns found in document');
+            return null;
+        }
+        
+        // Find the match that appears LATEST in the document (closest to the end)
+        let latestMatch = matches[0];
+        for (let i = 1; i < matches.length; i++) {
+            if (matches[i].index > latestMatch.index) {
+                latestMatch = matches[i];
+            }
+        }
+        
+        console.log(`Latest question in document: "${latestMatch.text}" at position ${latestMatch.index} -> number: ${latestMatch.number}`);
+        console.log('All matches found:', matches.map(m => `${m.text} (${m.number}) at pos ${m.index}`));
+        return latestMatch.number;
+    }
+
 
     // Function to update the time input field
     function updateTimeInput() {
@@ -577,16 +414,16 @@
 
     // Function to show auto-time detection notification
     function showAutoTimeNotification(time) {
-        const message = isIOSSafari
-            ? `⏱️ Đã tự động phát hiện thời gian: ${time} giây (iOS)`
+        const message = isIOSSafari 
+            ? `⏱️ Đã tự động phát hiện thời gian: ${time} giây (iOS)` 
             : `⏱️ Đã tự động phát hiện thời gian: ${time} giây`;
         showNotification(message, '#4CAF50');
     }
 
     // Function to show auto-questions detection notification
     function showAutoQuestionsNotification(questions) {
-        const message = isIOSSafari
-            ? `❓ Đã tự động phát hiện: ${questions} câu hỏi (iOS)`
+        const message = isIOSSafari 
+            ? `❓ Đã tự động phát hiện: ${questions} câu hỏi (iOS)` 
             : `❓ Đã tự động phát hiện: ${questions} câu hỏi`;
         showNotification(message, '#2196F3');
     }
@@ -734,7 +571,7 @@
                     CATE_UI.delLocalRecord("time_spent");
                     CATE_UI.delLocalRecord("time_init");
                 }
-
+                
                 // Fallback: try to clear localStorage directly
                 if (typeof localStorage !== 'undefined') {
                     const keysToRemove = ['data', 'time_spent', 'time_init', 'CATE_UI_data'];
@@ -746,7 +583,7 @@
                         }
                     });
                 }
-
+                
                 // Additional fallback: try sessionStorage
                 if (typeof sessionStorage !== 'undefined') {
                     const keysToRemove = ['data', 'time_spent', 'time_init', 'CATE_UI_data'];
@@ -1135,22 +972,22 @@
                 input.addEventListener('input', () => {
                     const tnScore = parseInt(normalInputs.tn_score.value) || 0;
                     const maxScore = parseInt(normalInputs.max_score.value) || 1;
-
+                    
                     // Ensure tn_score doesn't exceed max_score
                     if (field.id === 'tn_score' && tnScore > maxScore) {
                         normalInputs.tn_score.value = maxScore;
                         const adjustedTnScore = maxScore;
-
+                        
                         // Update correct (same as tn_score)
                         if (normalInputs.correct) {
                             normalInputs.correct.value = adjustedTnScore;
                         }
-
+                        
                         // Update wrong (max_score - correct)
                         if (normalInputs.wrong) {
                             normalInputs.wrong.value = Math.max(0, maxScore - adjustedTnScore);
                         }
-
+                        
                         // Update score (same as correct)
                         if (normalInputs.score) {
                             normalInputs.score.value = adjustedTnScore;
@@ -1160,12 +997,12 @@
                         if (normalInputs.correct) {
                             normalInputs.correct.value = tnScore;
                         }
-
+                        
                         // Update wrong (max_score - correct)
                         if (normalInputs.wrong) {
                             normalInputs.wrong.value = Math.max(0, maxScore - tnScore);
                         }
-
+                        
                         // Update score (same as correct)
                         if (normalInputs.score) {
                             normalInputs.score.value = tnScore;
@@ -1347,7 +1184,7 @@
 
         // Tab switching functionality
         let currentTab = 'video';
-
+        
         videoTab.onclick = () => {
             currentTab = 'video';
             videoTab.style.background = 'rgba(255,255,255,0.9)';
@@ -1357,7 +1194,7 @@
             videoContent.style.display = 'flex';
             normalContent.style.display = 'none';
         };
-
+        
         normalTab.onclick = () => {
             currentTab = 'normal';
             normalTab.style.background = 'rgba(255,255,255,0.9)';
