@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Data Submitter (iOS Compatible)
 // @namespace    http://tampermonkey.net/
-// @version      1.6.4
+// @version      1.6.5
 // @description  Submit course data with custom scores and auto time/question detection - iOS Safari compatible
 // @author       realdtn
 // @match        https://olm.vn/*
@@ -31,7 +31,7 @@
     async function parseDocxWithJSZip(arrayBuffer) {
         addDebugLog('Starting JSZip parsing...', 'info');
         console.log('Parsing DOCX with JSZip...');
-        
+
         try {
             // Load JSZip if not already loaded
             if (typeof JSZip === 'undefined') {
@@ -42,15 +42,15 @@
             } else {
                 addDebugLog('JSZip already available', 'info');
             }
-            
+
             const zip = new JSZip();
             addDebugLog('Loading DOCX with JSZip...', 'info');
             const docx = await zip.loadAsync(arrayBuffer);
-            
+
             const fileList = Object.keys(docx.files);
             addDebugLog(`DOCX loaded, found ${fileList.length} files`, 'success');
             console.log('DOCX loaded, files:', fileList);
-            
+
             // Extract document.xml
             const documentFile = docx.file('word/document.xml');
             if (!documentFile) {
@@ -58,21 +58,21 @@
                 console.log('Available files in DOCX:', fileList);
                 throw new Error('No document.xml found in DOCX file');
             }
-            
+
             addDebugLog('Found document.xml, extracting content...', 'info');
             const documentXml = await documentFile.async('text');
             addDebugLog(`Document XML extracted, length: ${documentXml.length}`, documentXml.length > 0 ? 'success' : 'error');
             console.log('Document XML length:', documentXml.length);
-            
+
             return documentXml;
-            
+
             } catch (error) {
             addDebugLog(`JSZip parsing error: ${error.message}`, 'error');
             console.error('Error parsing DOCX with JSZip:', error);
             throw error;
         }
     }
-    
+
     // Load JSZip library dynamically
     function loadJSZip() {
         return new Promise((resolve, reject) => {
@@ -80,7 +80,7 @@
                 resolve();
                 return;
             }
-            
+
             const script = document.createElement('script');
             script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
             script.onload = () => {
@@ -98,7 +98,7 @@
     function monitorNetworkRequests() {
         // iOS Safari extensions have limited access to network interception
         // We'll use a more compatible approach with event listeners
-        
+
         // Try to intercept fetch requests
         if (typeof window.fetch !== 'undefined') {
             const originalFetch = window.fetch;
@@ -247,7 +247,7 @@
 
             addDebugLog(`Fetching DOCX from: ${url}`, 'info');
             console.log('Fetching DOCX file to extract questions...');
-            
+
             // iOS Safari compatible fetch with proper error handling
             const response = await fetch(url, {
                 method: 'GET',
@@ -316,22 +316,22 @@
     // Function to extract text content from DOCX XML (same as OLM Docx Viewer)
     function extractTextFromDocx(xmlContent) {
         addDebugLog('Parsing DOCX XML content...', 'info');
-        
+
         // Clean the XML content to fix parsing issues on iOS
         let cleanXml = xmlContent;
-        
+
         // Remove all XML declarations first
         cleanXml = cleanXml.replace(/<\?xml[^>]*\?>/g, '');
-        
+
         // Remove any BOM or leading whitespace
         cleanXml = cleanXml.trim();
-        
+
         // Add a single XML declaration at the start
         cleanXml = '<?xml version="1.0" encoding="UTF-8"?>' + cleanXml;
-        
+
         addDebugLog(`Cleaned XML length: ${cleanXml.length}`, 'info');
         addDebugLog(`XML starts with: ${cleanXml.substring(0, 100)}...`, 'info');
-        
+
         const parser = new DOMParser();
         const doc = parser.parseFromString(cleanXml, 'text/xml');
 
@@ -353,22 +353,22 @@
             // Fallback: look for paragraphs directly
             const paragraphs = doc.querySelectorAll('w\\:p, p');
             addDebugLog(`Found ${paragraphs.length} paragraphs directly`, 'info');
-            
+
             paragraphs.forEach(p => {
                 const textElements = p.querySelectorAll('w\\:t, t');
-                textElements.forEach(element => {
-                    const text = element.textContent || '';
-                    if (text.trim()) {
-                        allText += text + ' ';
-                    }
-                });
+        textElements.forEach(element => {
+            const text = element.textContent || '';
+            if (text.trim()) {
+                allText += text + ' ';
+            }
+        });
             });
         } else {
             addDebugLog('Found body element, processing paragraphs...', 'info');
             // Process all paragraphs in the body
             const paragraphs = body.querySelectorAll('w\\:p, p');
             addDebugLog(`Found ${paragraphs.length} paragraphs in body`, 'info');
-            
+
             paragraphs.forEach(p => {
                 const textElements = p.querySelectorAll('w\\:t, t');
         textElements.forEach(element => {
@@ -398,12 +398,12 @@
         addDebugLog(`Searching document of length: ${textContent.length}`, 'info');
         console.log('Searching from end of document to start...');
         console.log('Document length:', textContent.length);
-        
+
         // ACTUALLY READ FROM THE END - search backwards through the entire document
         const questionRegex = /(?:Câu|Question|Câu hỏi)\s+(\d+)[\s\.:]/gi;
         const matches = [];
         let match;
-        
+
         // Find ALL matches in the ENTIRE document
         while ((match = questionRegex.exec(textContent)) !== null) {
             const matchData = {
@@ -417,16 +417,16 @@
             console.log(`Found match: "${match[0]}" -> number: ${matchData.number} at position ${match.index}`);
             console.log(`Context: "${matchData.context}"`);
         }
-        
+
         addDebugLog(`Total matches found: ${matches.length}`, matches.length > 0 ? 'success' : 'warning');
         console.log(`Found ${matches.length} question matches in entire document:`, matches);
-        
+
         if (matches.length === 0) {
             addDebugLog('No question patterns found in document', 'error');
             console.log('No question patterns found in document');
             return null;
         }
-        
+
         // Find the match that appears LATEST in the document (closest to the end)
         let latestMatch = matches[0];
         for (let i = 1; i < matches.length; i++) {
@@ -434,7 +434,7 @@
                 latestMatch = matches[i];
             }
         }
-        
+
         addDebugLog(`Latest question: ${latestMatch.text} -> ${latestMatch.number} questions total`, 'success');
         console.log(`Latest question in document: "${latestMatch.text}" at position ${latestMatch.index} -> number: ${latestMatch.number}`);
         console.log('All matches found:', matches.map(m => `${m.text} (${m.number}) at pos ${m.index}`));
@@ -466,6 +466,13 @@
     // Function to update the questions input field
     function updateQuestionsInput() {
         if (detectedTotalQuestions && detectedTotalQuestions > 0) {
+            // Skip if detected number is 50 (likely false positive)
+            if (detectedTotalQuestions === 50) {
+                console.log('Skipping auto-detection for value 50 (likely false positive)');
+                return;
+            }
+
+            // Update video questions fields
             const questionsInput = document.getElementById('count_problems');
             const correctInput = document.getElementById('correct');
             const scoreInput = document.getElementById('score');
@@ -484,6 +491,13 @@
                 scoreInput.value = 100;
             }
 
+            // Update normal questions fields
+            const maxScoreInput = document.getElementById('max_score');
+            if (maxScoreInput) {
+                maxScoreInput.value = detectedTotalQuestions;
+                console.log('Updated max_score input to:', detectedTotalQuestions);
+            }
+
             // Show notification
             showAutoQuestionsNotification(detectedTotalQuestions);
         }
@@ -491,16 +505,16 @@
 
     // Function to show auto-time detection notification
     function showAutoTimeNotification(time) {
-        const message = isIOSSafari 
-            ? `⏱️ Đã tự động phát hiện thời gian: ${time} giây (iOS)` 
+        const message = isIOSSafari
+            ? `⏱️ Đã tự động phát hiện thời gian: ${time} giây (iOS)`
             : `⏱️ Đã tự động phát hiện thời gian: ${time} giây`;
         showNotification(message, '#4CAF50');
     }
 
     // Function to show auto-questions detection notification
     function showAutoQuestionsNotification(questions) {
-        const message = isIOSSafari 
-            ? `❓ Đã tự động phát hiện: ${questions} câu hỏi (iOS)` 
+        const message = isIOSSafari
+            ? `❓ Đã tự động phát hiện: ${questions} câu hỏi (iOS)`
             : `❓ Đã tự động phát hiện: ${questions} câu hỏi`;
         showNotification(message, '#2196F3');
     }
@@ -648,7 +662,7 @@
                     CATE_UI.delLocalRecord("time_spent");
                     CATE_UI.delLocalRecord("time_init");
                 }
-                
+
                 // Fallback: try to clear localStorage directly
                 if (typeof localStorage !== 'undefined') {
                     const keysToRemove = ['data', 'time_spent', 'time_init', 'CATE_UI_data'];
@@ -660,7 +674,7 @@
                         }
                     });
                 }
-                
+
                 // Additional fallback: try sessionStorage
                 if (typeof sessionStorage !== 'undefined') {
                     const keysToRemove = ['data', 'time_spent', 'time_init', 'CATE_UI_data'];
@@ -801,7 +815,7 @@
     // Debug logging system
     const debugLogs = [];
     const maxLogs = 100;
-    
+
     function addDebugLog(message, type = 'info') {
         const timestamp = new Date().toLocaleTimeString();
         const logEntry = {
@@ -810,23 +824,23 @@
             type
         };
         debugLogs.push(logEntry);
-        
+
         // Keep only the last maxLogs entries
         if (debugLogs.length > maxLogs) {
             debugLogs.shift();
         }
-        
+
         // Update debug UI if it exists
         updateDebugUI();
-        
+
         // Also log to console
         console.log(`[${timestamp}] ${message}`);
     }
-    
+
     function updateDebugUI() {
         const debugContent = document.getElementById('debug-content');
         if (debugContent) {
-            debugContent.innerHTML = debugLogs.map(log => 
+            debugContent.innerHTML = debugLogs.map(log =>
                 `<div class="debug-log debug-${log.type}">
                     <span class="debug-time">[${log.timestamp}]</span>
                     <span class="debug-message">${log.message}</span>
@@ -1173,10 +1187,10 @@
             cursor: pointer;
         `;
         copyLogBtn.onclick = () => {
-            const logText = debugLogs.map(log => 
+            const logText = debugLogs.map(log =>
                 `[${log.timestamp}] ${log.message}`
             ).join('\n');
-            
+
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(logText).then(() => {
                     addDebugLog('Logs copied to clipboard!', 'success');
@@ -1256,22 +1270,22 @@
                 input.addEventListener('input', () => {
                     const tnScore = parseInt(normalInputs.tn_score.value) || 0;
                     const maxScore = parseInt(normalInputs.max_score.value) || 1;
-                    
+
                     // Ensure tn_score doesn't exceed max_score
                     if (field.id === 'tn_score' && tnScore > maxScore) {
                         normalInputs.tn_score.value = maxScore;
                         const adjustedTnScore = maxScore;
-                        
+
                         // Update correct (same as tn_score)
                         if (normalInputs.correct) {
                             normalInputs.correct.value = adjustedTnScore;
                         }
-                        
+
                         // Update wrong (max_score - correct)
                         if (normalInputs.wrong) {
                             normalInputs.wrong.value = Math.max(0, maxScore - adjustedTnScore);
                         }
-                        
+
                         // Update score (same as correct)
                         if (normalInputs.score) {
                             normalInputs.score.value = adjustedTnScore;
@@ -1281,12 +1295,12 @@
                         if (normalInputs.correct) {
                             normalInputs.correct.value = tnScore;
                         }
-                        
+
                         // Update wrong (max_score - correct)
                         if (normalInputs.wrong) {
                             normalInputs.wrong.value = Math.max(0, maxScore - tnScore);
                         }
-                        
+
                         // Update score (same as correct)
                         if (normalInputs.score) {
                             normalInputs.score.value = tnScore;
@@ -1468,7 +1482,7 @@
 
         // Tab switching functionality
         let currentTab = 'video';
-        
+
         videoTab.onclick = () => {
             currentTab = 'video';
             videoTab.style.background = 'rgba(255,255,255,0.9)';
@@ -1481,7 +1495,7 @@
             normalContent.style.display = 'none';
             debugContent.style.display = 'none';
         };
-        
+
         normalTab.onclick = () => {
             currentTab = 'normal';
             normalTab.style.background = 'rgba(255,255,255,0.9)';
