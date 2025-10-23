@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.6
 // @description  Submit course data with custom scores and auto time/question detection - iOS Safari compatible
-// @author       You
+// @author       realdtn
 // @match        https://olm.vn/*
 // @grant        none
 // @run-at       document-end
