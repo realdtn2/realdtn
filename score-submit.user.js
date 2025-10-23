@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Data Submitter (iOS Compatible)
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.6.1
 // @description  Submit course data with custom scores and auto time/question detection - iOS Safari compatible
 // @author       realdtn
 // @match        https://olm.vn/*
@@ -30,37 +30,37 @@
     // Use JSZip for proper DOCX parsing (same as OLM Docx Viewer)
     async function parseDocxWithJSZip(arrayBuffer) {
         console.log('Parsing DOCX with JSZip...');
-        
+
         try {
             // Load JSZip if not already loaded
             if (typeof JSZip === 'undefined') {
                 console.log('Loading JSZip library...');
                 await loadJSZip();
             }
-            
+
             const zip = new JSZip();
             const docx = await zip.loadAsync(arrayBuffer);
-            
+
             console.log('DOCX loaded, files:', Object.keys(docx.files));
-            
+
             // Extract document.xml
             const documentFile = docx.file('word/document.xml');
             if (!documentFile) {
                 console.log('Available files in DOCX:', Object.keys(docx.files));
                 throw new Error('No document.xml found in DOCX file');
             }
-            
+
             const documentXml = await documentFile.async('text');
             console.log('Document XML length:', documentXml.length);
-            
+
             return documentXml;
-            
+
         } catch (error) {
             console.error('Error parsing DOCX with JSZip:', error);
             throw error;
         }
     }
-    
+
     // Load JSZip library dynamically
     function loadJSZip() {
         return new Promise((resolve, reject) => {
@@ -68,7 +68,7 @@
                 resolve();
                 return;
             }
-            
+
             const script = document.createElement('script');
             script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
             script.onload = () => {
@@ -86,7 +86,7 @@
     function monitorNetworkRequests() {
         // iOS Safari extensions have limited access to network interception
         // We'll use a more compatible approach with event listeners
-        
+
         // Try to intercept fetch requests
         if (typeof window.fetch !== 'undefined') {
             const originalFetch = window.fetch;
@@ -229,11 +229,13 @@
     // Function to fetch docx file and extract total questions (iOS compatible)
     async function extractTotalQuestionsFromDocx() {
         try {
+            addDebugLog('Starting DOCX question extraction', 'info');
             const idCategory = extractIdCategory();
             const url = `https://olm.vn/download-word-for-user?id_cate=${idCategory}&showAns=1&questionNotApproved=0`;
 
+            addDebugLog(`Fetching DOCX from: ${url}`, 'info');
             console.log('Fetching DOCX file to extract questions...');
-            
+
             // iOS Safari compatible fetch with proper error handling
             const response = await fetch(url, {
                 method: 'GET',
@@ -269,19 +271,25 @@
             }
 
             const arrayBuffer = await docxResponse.arrayBuffer();
+            addDebugLog(`DOCX file size: ${arrayBuffer.byteLength} bytes`, 'info');
             console.log('DOCX file size:', arrayBuffer.byteLength, 'bytes');
 
             // Parse DOCX with JSZip (same as OLM Docx Viewer)
+            addDebugLog('Parsing DOCX with JSZip...', 'info');
             const documentXml = await parseDocxWithJSZip(arrayBuffer);
 
             // Extract all text content from the document
+            addDebugLog('Extracting text from DOCX XML...', 'info');
             const textContent = extractTextFromDocx(documentXml);
+            addDebugLog(`Extracted text length: ${textContent.length}`, 'info');
             console.log('Extracted text content length:', textContent.length);
             console.log('First 500 characters of extracted text:', textContent.substring(0, 500));
             console.log('Last 500 characters of extracted text:', textContent.substring(Math.max(0, textContent.length - 500)));
 
             // Find the last question number by reading backwards
+            addDebugLog('Searching for questions in document...', 'info');
             const totalQuestions = findLastQuestionNumber(textContent);
+            addDebugLog(`Detected total questions: ${totalQuestions}`, totalQuestions ? 'success' : 'error');
             console.log('Detected total questions:', totalQuestions);
 
             return totalQuestions;
@@ -323,14 +331,15 @@
 
     // Function to search from END to START and find the first question
     function findFirstQuestionFromEnd(textContent) {
+        addDebugLog(`Searching document of length: ${textContent.length}`, 'info');
         console.log('Searching from end of document to start...');
         console.log('Document length:', textContent.length);
-        
+
         // ACTUALLY READ FROM THE END - search backwards through the entire document
         const questionRegex = /(?:Câu|Question|Câu hỏi)\s+(\d+)[\s\.:]/gi;
         const matches = [];
         let match;
-        
+
         // Find ALL matches in the ENTIRE document
         while ((match = questionRegex.exec(textContent)) !== null) {
             const matchData = {
@@ -340,17 +349,20 @@
                 context: textContent.substring(Math.max(0, match.index - 20), match.index + match[0].length + 20)
             };
             matches.push(matchData);
+            addDebugLog(`Found: ${match[0]} (${matchData.number}) at pos ${match.index}`, 'info');
             console.log(`Found match: "${match[0]}" -> number: ${matchData.number} at position ${match.index}`);
             console.log(`Context: "${matchData.context}"`);
         }
-        
+
+        addDebugLog(`Total matches found: ${matches.length}`, matches.length > 0 ? 'success' : 'warning');
         console.log(`Found ${matches.length} question matches in entire document:`, matches);
-        
+
         if (matches.length === 0) {
+            addDebugLog('No question patterns found in document', 'error');
             console.log('No question patterns found in document');
             return null;
         }
-        
+
         // Find the match that appears LATEST in the document (closest to the end)
         let latestMatch = matches[0];
         for (let i = 1; i < matches.length; i++) {
@@ -358,7 +370,8 @@
                 latestMatch = matches[i];
             }
         }
-        
+
+        addDebugLog(`Latest question: ${latestMatch.text} -> ${latestMatch.number} questions total`, 'success');
         console.log(`Latest question in document: "${latestMatch.text}" at position ${latestMatch.index} -> number: ${latestMatch.number}`);
         console.log('All matches found:', matches.map(m => `${m.text} (${m.number}) at pos ${m.index}`));
         return latestMatch.number;
@@ -414,16 +427,16 @@
 
     // Function to show auto-time detection notification
     function showAutoTimeNotification(time) {
-        const message = isIOSSafari 
-            ? `⏱️ Đã tự động phát hiện thời gian: ${time} giây (iOS)` 
+        const message = isIOSSafari
+            ? `⏱️ Đã tự động phát hiện thời gian: ${time} giây (iOS)`
             : `⏱️ Đã tự động phát hiện thời gian: ${time} giây`;
         showNotification(message, '#4CAF50');
     }
 
     // Function to show auto-questions detection notification
     function showAutoQuestionsNotification(questions) {
-        const message = isIOSSafari 
-            ? `❓ Đã tự động phát hiện: ${questions} câu hỏi (iOS)` 
+        const message = isIOSSafari
+            ? `❓ Đã tự động phát hiện: ${questions} câu hỏi (iOS)`
             : `❓ Đã tự động phát hiện: ${questions} câu hỏi`;
         showNotification(message, '#2196F3');
     }
@@ -571,7 +584,7 @@
                     CATE_UI.delLocalRecord("time_spent");
                     CATE_UI.delLocalRecord("time_init");
                 }
-                
+
                 // Fallback: try to clear localStorage directly
                 if (typeof localStorage !== 'undefined') {
                     const keysToRemove = ['data', 'time_spent', 'time_init', 'CATE_UI_data'];
@@ -583,7 +596,7 @@
                         }
                     });
                 }
-                
+
                 // Additional fallback: try sessionStorage
                 if (typeof sessionStorage !== 'undefined') {
                     const keysToRemove = ['data', 'time_spent', 'time_init', 'CATE_UI_data'];
@@ -721,6 +734,44 @@
         }
     }
 
+    // Debug logging system
+    const debugLogs = [];
+    const maxLogs = 100;
+
+    function addDebugLog(message, type = 'info') {
+        const timestamp = new Date().toLocaleTimeString();
+        const logEntry = {
+            timestamp,
+            message,
+            type
+        };
+        debugLogs.push(logEntry);
+
+        // Keep only the last maxLogs entries
+        if (debugLogs.length > maxLogs) {
+            debugLogs.shift();
+        }
+
+        // Update debug UI if it exists
+        updateDebugUI();
+
+        // Also log to console
+        console.log(`[${timestamp}] ${message}`);
+    }
+
+    function updateDebugUI() {
+        const debugContent = document.getElementById('debug-content');
+        if (debugContent) {
+            debugContent.innerHTML = debugLogs.map(log =>
+                `<div class="debug-log debug-${log.type}">
+                    <span class="debug-time">[${log.timestamp}]</span>
+                    <span class="debug-message">${log.message}</span>
+                </div>`
+            ).join('');
+            debugContent.scrollTop = debugContent.scrollHeight;
+        }
+    }
+
     // Function to create UI
     function createUI() {
         // Create toggle button
@@ -840,8 +891,23 @@
             transition: all 0.3s;
         `;
 
+        const debugTab = document.createElement('button');
+        debugTab.textContent = 'Debug';
+        debugTab.style.cssText = `
+            flex: 1;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        `;
+
         tabNav.appendChild(videoTab);
         tabNav.appendChild(normalTab);
+        tabNav.appendChild(debugTab);
 
         // Video tab content
         const videoContent = document.createElement('div');
@@ -922,6 +988,109 @@
             gap: 12px;
         `;
 
+        // Debug tab content
+        const debugContent = document.createElement('div');
+        debugContent.style.cssText = `
+            display: none;
+            flex-direction: column;
+            gap: 12px;
+            max-height: 400px;
+        `;
+
+        const debugLogContainer = document.createElement('div');
+        debugLogContainer.style.cssText = `
+            background: rgba(0,0,0,0.1);
+            border-radius: 8px;
+            padding: 10px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        `;
+
+        const debugLogsDiv = document.createElement('div');
+        debugLogsDiv.id = 'debug-content';
+        debugLogsDiv.style.cssText = `
+            color: #333;
+            line-height: 1.4;
+        `;
+
+        // Add CSS for debug log styling
+        const debugStyles = document.createElement('style');
+        debugStyles.textContent = `
+            .debug-log {
+                margin: 2px 0;
+                padding: 2px 4px;
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            .debug-info {
+                background: rgba(0, 123, 255, 0.1);
+                color: #0066cc;
+            }
+            .debug-success {
+                background: rgba(40, 167, 69, 0.1);
+                color: #28a745;
+            }
+            .debug-warning {
+                background: rgba(255, 193, 7, 0.1);
+                color: #ffc107;
+            }
+            .debug-error {
+                background: rgba(220, 53, 69, 0.1);
+                color: #dc3545;
+            }
+            .debug-time {
+                font-weight: bold;
+                margin-right: 8px;
+            }
+        `;
+        document.head.appendChild(debugStyles);
+
+        const debugControls = document.createElement('div');
+        debugControls.style.cssText = `
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        `;
+
+        const clearDebugBtn = document.createElement('button');
+        clearDebugBtn.textContent = 'Clear Logs';
+        clearDebugBtn.style.cssText = `
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            font-size: 12px;
+            cursor: pointer;
+        `;
+        clearDebugBtn.onclick = () => {
+            debugLogs.length = 0;
+            updateDebugUI();
+        };
+
+        const testDebugBtn = document.createElement('button');
+        testDebugBtn.textContent = 'Test Log';
+        testDebugBtn.style.cssText = `
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            font-size: 12px;
+            cursor: pointer;
+        `;
+        testDebugBtn.onclick = () => {
+            addDebugLog('Test log message', 'info');
+        };
+
+        debugControls.appendChild(clearDebugBtn);
+        debugControls.appendChild(testDebugBtn);
+        debugLogContainer.appendChild(debugLogsDiv);
+        debugContent.appendChild(debugLogContainer);
+        debugContent.appendChild(debugControls);
+
         const normalFields = [
             { id: 'time_spent', label: 'Thời gian làm bài (giây)', type: 'number', min: 0, defaultValue: 0 },
             { id: 'tl_score', label: 'Số câu tự luận đúng', type: 'number', min: 0, defaultValue: 0 },
@@ -972,22 +1141,22 @@
                 input.addEventListener('input', () => {
                     const tnScore = parseInt(normalInputs.tn_score.value) || 0;
                     const maxScore = parseInt(normalInputs.max_score.value) || 1;
-                    
+
                     // Ensure tn_score doesn't exceed max_score
                     if (field.id === 'tn_score' && tnScore > maxScore) {
                         normalInputs.tn_score.value = maxScore;
                         const adjustedTnScore = maxScore;
-                        
+
                         // Update correct (same as tn_score)
                         if (normalInputs.correct) {
                             normalInputs.correct.value = adjustedTnScore;
                         }
-                        
+
                         // Update wrong (max_score - correct)
                         if (normalInputs.wrong) {
                             normalInputs.wrong.value = Math.max(0, maxScore - adjustedTnScore);
                         }
-                        
+
                         // Update score (same as correct)
                         if (normalInputs.score) {
                             normalInputs.score.value = adjustedTnScore;
@@ -997,12 +1166,12 @@
                         if (normalInputs.correct) {
                             normalInputs.correct.value = tnScore;
                         }
-                        
+
                         // Update wrong (max_score - correct)
                         if (normalInputs.wrong) {
                             normalInputs.wrong.value = Math.max(0, maxScore - tnScore);
                         }
-                        
+
                         // Update score (same as correct)
                         if (normalInputs.score) {
                             normalInputs.score.value = tnScore;
@@ -1184,25 +1353,44 @@
 
         // Tab switching functionality
         let currentTab = 'video';
-        
+
         videoTab.onclick = () => {
             currentTab = 'video';
             videoTab.style.background = 'rgba(255,255,255,0.9)';
             videoTab.style.color = '#667eea';
             normalTab.style.background = 'rgba(255,255,255,0.2)';
             normalTab.style.color = 'white';
+            debugTab.style.background = 'rgba(255,255,255,0.2)';
+            debugTab.style.color = 'white';
             videoContent.style.display = 'flex';
             normalContent.style.display = 'none';
+            debugContent.style.display = 'none';
         };
-        
+
         normalTab.onclick = () => {
             currentTab = 'normal';
             normalTab.style.background = 'rgba(255,255,255,0.9)';
             normalTab.style.color = '#667eea';
             videoTab.style.background = 'rgba(255,255,255,0.2)';
             videoTab.style.color = 'white';
+            debugTab.style.background = 'rgba(255,255,255,0.2)';
+            debugTab.style.color = 'white';
             normalContent.style.display = 'flex';
             videoContent.style.display = 'none';
+            debugContent.style.display = 'none';
+        };
+
+        debugTab.onclick = () => {
+            currentTab = 'debug';
+            debugTab.style.background = 'rgba(255,255,255,0.9)';
+            debugTab.style.color = '#667eea';
+            videoTab.style.background = 'rgba(255,255,255,0.2)';
+            videoTab.style.color = 'white';
+            normalTab.style.background = 'rgba(255,255,255,0.2)';
+            normalTab.style.color = 'white';
+            debugContent.style.display = 'flex';
+            videoContent.style.display = 'none';
+            normalContent.style.display = 'none';
         };
 
         // Assemble UI
@@ -1210,6 +1398,7 @@
         container.appendChild(tabNav);
         container.appendChild(videoContent);
         container.appendChild(normalContent);
+        container.appendChild(debugContent);
         container.appendChild(statusMsg);
         container.appendChild(deleteBtn);
         container.appendChild(submitBtn);
