@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Data Submitter (iOS Compatible)
 // @namespace    http://tampermonkey.net/
-// @version      1.6.3
+// @version      1.6.4
 // @description  Submit course data with custom scores and auto time/question detection - iOS Safari compatible
 // @author       realdtn
 // @match        https://olm.vn/*
@@ -1209,7 +1209,7 @@
         const normalFields = [
             { id: 'time_spent', label: 'Thời gian làm bài (giây)', type: 'number', min: 0, defaultValue: 0 },
             { id: 'tl_score', label: 'Số câu tự luận đúng', type: 'number', min: 0, defaultValue: 0 },
-            { id: 'tn_score', label: 'Số câu đúng', type: 'number', min: 0, defaultValue: 0 },
+            { id: 'tn_score', label: 'Số câu trắc nghiệm đúng', type: 'number', min: 0, defaultValue: 0 },
             { id: 'max_score', label: 'Tổng số câu hỏi', type: 'number', min: 0, defaultValue: 0 }
         ];
 
