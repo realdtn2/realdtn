@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Data Submitter (iOS Compatible)
 // @namespace    http://tampermonkey.net/
-// @version      1.6.1
+// @version      1.6.2
 // @description  Submit course data with custom scores and auto time/question detection - iOS Safari compatible
 // @author       realdtn
 // @match        https://olm.vn/*
@@ -29,33 +29,45 @@
 
     // Use JSZip for proper DOCX parsing (same as OLM Docx Viewer)
     async function parseDocxWithJSZip(arrayBuffer) {
+        addDebugLog('Starting JSZip parsing...', 'info');
         console.log('Parsing DOCX with JSZip...');
 
         try {
             // Load JSZip if not already loaded
             if (typeof JSZip === 'undefined') {
+                addDebugLog('JSZip not found, loading library...', 'info');
                 console.log('Loading JSZip library...');
                 await loadJSZip();
+                addDebugLog('JSZip loaded successfully', 'success');
+            } else {
+                addDebugLog('JSZip already available', 'info');
             }
 
             const zip = new JSZip();
+            addDebugLog('Loading DOCX with JSZip...', 'info');
             const docx = await zip.loadAsync(arrayBuffer);
 
-            console.log('DOCX loaded, files:', Object.keys(docx.files));
+            const fileList = Object.keys(docx.files);
+            addDebugLog(`DOCX loaded, found ${fileList.length} files`, 'success');
+            console.log('DOCX loaded, files:', fileList);
 
             // Extract document.xml
             const documentFile = docx.file('word/document.xml');
             if (!documentFile) {
-                console.log('Available files in DOCX:', Object.keys(docx.files));
+                addDebugLog(`No document.xml found. Available files: ${fileList.join(', ')}`, 'error');
+                console.log('Available files in DOCX:', fileList);
                 throw new Error('No document.xml found in DOCX file');
             }
 
+            addDebugLog('Found document.xml, extracting content...', 'info');
             const documentXml = await documentFile.async('text');
+            addDebugLog(`Document XML extracted, length: ${documentXml.length}`, documentXml.length > 0 ? 'success' : 'error');
             console.log('Document XML length:', documentXml.length);
 
             return documentXml;
 
         } catch (error) {
+            addDebugLog(`JSZip parsing error: ${error.message}`, 'error');
             console.error('Error parsing DOCX with JSZip:', error);
             throw error;
         }
@@ -301,22 +313,59 @@
     }
 
 
-    // Function to extract text content from DOCX XML
+    // Function to extract text content from DOCX XML (same as OLM Docx Viewer)
     function extractTextFromDocx(xmlContent) {
+        addDebugLog('Parsing DOCX XML content...', 'info');
+
         const parser = new DOMParser();
         const doc = parser.parseFromString(xmlContent, 'text/xml');
 
+        // Check for parsing errors
+        const parserError = doc.querySelector('parsererror');
+        if (parserError) {
+            addDebugLog(`XML parsing error: ${parserError.textContent}`, 'error');
+            throw new Error('Failed to parse document XML');
+        }
+
+        addDebugLog('XML parsed successfully, extracting text...', 'info');
+
         let allText = '';
 
-        // Extract text from all text elements
-        const textElements = doc.querySelectorAll('w\\:t, t');
-        textElements.forEach(element => {
-            const text = element.textContent || '';
-            if (text.trim()) {
-                allText += text + ' ';
-            }
-        });
+        // Find the document body
+        const body = doc.querySelector('body');
+        if (!body) {
+            addDebugLog('No body element found, searching for paragraphs directly...', 'warning');
+            // Fallback: look for paragraphs directly
+            const paragraphs = doc.querySelectorAll('w\\:p, p');
+            addDebugLog(`Found ${paragraphs.length} paragraphs directly`, 'info');
 
+            paragraphs.forEach(p => {
+                const textElements = p.querySelectorAll('w\\:t, t');
+                textElements.forEach(element => {
+                    const text = element.textContent || '';
+                    if (text.trim()) {
+                        allText += text + ' ';
+                    }
+                });
+            });
+        } else {
+            addDebugLog('Found body element, processing paragraphs...', 'info');
+            // Process all paragraphs in the body
+            const paragraphs = body.querySelectorAll('w\\:p, p');
+            addDebugLog(`Found ${paragraphs.length} paragraphs in body`, 'info');
+
+            paragraphs.forEach(p => {
+                const textElements = p.querySelectorAll('w\\:t, t');
+                textElements.forEach(element => {
+                    const text = element.textContent || '';
+                    if (text.trim()) {
+                        allText += text + ' ';
+                    }
+                });
+            });
+        }
+
+        addDebugLog(`Extracted text length: ${allText.length}`, allText.length > 0 ? 'success' : 'error');
         return allText;
     }
 
@@ -999,50 +1048,62 @@
 
         const debugLogContainer = document.createElement('div');
         debugLogContainer.style.cssText = `
-            background: rgba(0,0,0,0.1);
+            background: rgba(0,0,0,0.8);
             border-radius: 8px;
-            padding: 10px;
+            padding: 12px;
             max-height: 300px;
             overflow-y: auto;
             font-family: 'Courier New', monospace;
-            font-size: 12px;
+            font-size: 13px;
+            border: 1px solid rgba(255,255,255,0.2);
         `;
 
         const debugLogsDiv = document.createElement('div');
         debugLogsDiv.id = 'debug-content';
         debugLogsDiv.style.cssText = `
-            color: #333;
-            line-height: 1.4;
+            color: #ffffff;
+            line-height: 1.6;
+            font-weight: 400;
         `;
 
         // Add CSS for debug log styling
         const debugStyles = document.createElement('style');
         debugStyles.textContent = `
             .debug-log {
-                margin: 2px 0;
-                padding: 2px 4px;
-                border-radius: 3px;
-                font-size: 11px;
+                margin: 3px 0;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 12px;
+                border-left: 3px solid;
+                word-wrap: break-word;
             }
             .debug-info {
-                background: rgba(0, 123, 255, 0.1);
-                color: #0066cc;
+                background: rgba(0, 123, 255, 0.15);
+                color: #66b3ff;
+                border-left-color: #0066cc;
             }
             .debug-success {
-                background: rgba(40, 167, 69, 0.1);
-                color: #28a745;
+                background: rgba(40, 167, 69, 0.15);
+                color: #4ade80;
+                border-left-color: #28a745;
             }
             .debug-warning {
-                background: rgba(255, 193, 7, 0.1);
-                color: #ffc107;
+                background: rgba(255, 193, 7, 0.15);
+                color: #fbbf24;
+                border-left-color: #ffc107;
             }
             .debug-error {
-                background: rgba(220, 53, 69, 0.1);
-                color: #dc3545;
+                background: rgba(220, 53, 69, 0.15);
+                color: #f87171;
+                border-left-color: #dc3545;
             }
             .debug-time {
-                font-weight: bold;
-                margin-right: 8px;
+                font-weight: 600;
+                margin-right: 10px;
+                opacity: 0.8;
+            }
+            .debug-message {
+                font-weight: 400;
             }
         `;
         document.head.appendChild(debugStyles);
@@ -1085,8 +1146,47 @@
             addDebugLog('Test log message', 'info');
         };
 
+        const copyLogBtn = document.createElement('button');
+        copyLogBtn.textContent = 'Copy Logs';
+        copyLogBtn.style.cssText = `
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            font-size: 12px;
+            cursor: pointer;
+        `;
+        copyLogBtn.onclick = () => {
+            const logText = debugLogs.map(log =>
+                `[${log.timestamp}] ${log.message}`
+            ).join('\n');
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(logText).then(() => {
+                    addDebugLog('Logs copied to clipboard!', 'success');
+                }).catch(() => {
+                    addDebugLog('Failed to copy logs', 'error');
+                });
+            } else {
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = logText;
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    addDebugLog('Logs copied to clipboard!', 'success');
+                } catch (err) {
+                    addDebugLog('Failed to copy logs', 'error');
+                }
+                document.body.removeChild(textArea);
+            }
+        };
+
         debugControls.appendChild(clearDebugBtn);
         debugControls.appendChild(testDebugBtn);
+        debugControls.appendChild(copyLogBtn);
         debugLogContainer.appendChild(debugLogsDiv);
         debugContent.appendChild(debugLogContainer);
         debugContent.appendChild(debugControls);
