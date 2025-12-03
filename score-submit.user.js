@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Course Data Submitter (iOS Compatible)
 // @namespace    http://tampermonkey.net/
-// @version      1.6.5
+// @version      1.6.6
 // @description  Submit course data with custom scores and auto time/question detection - iOS Safari compatible
 // @author       realdtn
 // @match        https://olm.vn/*
@@ -1430,8 +1430,10 @@
 
             if (currentTab === 'video') {
                 const score = parseInt(inputs.score.value) || 100;
-                const countProblems = parseInt(inputs.count_problems.value) || 10;
-                const correct = parseInt(inputs.correct.value) || 10;
+                const countProblemsValue = parseInt(inputs.count_problems.value);
+                const countProblems = isNaN(countProblemsValue) ? 10 : countProblemsValue;
+                const correctValue = parseInt(inputs.correct.value);
+                const correct = isNaN(correctValue) ? 10 : correctValue;
                 const timeWatched = parseInt(inputs.time_watched.value) || 300;
 
                 // Validate
